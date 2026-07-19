@@ -1,0 +1,62 @@
+version: "3.8"
+
+services:
+  node1:
+    build: .
+    command: >
+      /app/server
+      --node-id node1
+      --addr :7001
+      --http-addr :8001
+      --peers node2=node2:7002,node3=node3:7003
+      --data-dir /data
+    ports:
+      - "7001:7001"
+      - "8001:8001"
+    volumes:
+      - node1_data:/data
+    networks:
+      - kver
+
+  node2:
+    build: .
+    command: >
+      /app/server
+      --node-id node2
+      --addr :7002
+      --http-addr :8002
+      --peers node1=node1:7001,node3=node3:7003
+      --data-dir /data
+    ports:
+      - "7002:7002"
+      - "8002:8002"
+    volumes:
+      - node2_data:/data
+    networks:
+      - kver
+
+  node3:
+    build: .
+    command: >
+      /app/server
+      --node-id node3
+      --addr :7003
+      --http-addr :8003
+      --peers node1=node1:7001,node2=node2:7002
+      --data-dir /data
+    ports:
+      - "7003:7003"
+      - "8003:8003"
+    volumes:
+      - node3_data:/data
+    networks:
+      - kver
+
+volumes:
+  node1_data:
+  node2_data:
+  node3_data:
+
+networks:
+  kver:
+    driver: bridge

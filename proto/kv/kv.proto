@@ -1,0 +1,272 @@
+syntax = "proto3";
+
+package kv;
+
+option go_package = "github.com/emin/kver/proto/kv/gen;kvpb";
+
+// KVService: Dış dünyaya açılan (Client-facing) API
+service KVService {
+  // --- String Ops ---
+  rpc Set(SetRequest) returns (SetResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Incr(IncrRequest) returns (IncrResponse);
+  rpc Decr(DecrRequest) returns (DecrResponse);
+
+  // --- Hash Ops ---
+  rpc HSet(HSetRequest) returns (HSetResponse);
+  rpc HGet(HGetRequest) returns (HGetResponse);
+  rpc HDelete(HDeleteRequest) returns (HDeleteResponse);
+  rpc HGetAll(HGetAllRequest) returns (HGetAllResponse);
+  rpc HExists(HExistsRequest) returns (HExistsResponse);
+
+  // --- List Ops ---
+  rpc LPush(LPushRequest) returns (LPushResponse);
+  rpc RPush(RPushRequest) returns (RPushResponse);
+  rpc LPop(LPopRequest) returns (LPopResponse);
+  rpc RPop(RPopRequest) returns (RPopResponse);
+  rpc LRange(LRangeRequest) returns (LRangeResponse);
+  rpc LLen(LLenRequest) returns (LLenResponse);
+
+  // --- Sorted Set Ops ---
+  rpc ZAdd(ZAddRequest) returns (ZAddResponse);
+  rpc ZScore(ZScoreRequest) returns (ZScoreResponse);
+  rpc ZRank(ZRankRequest) returns (ZRankResponse);
+  rpc ZRange(ZRangeRequest) returns (ZRangeResponse);
+  rpc ZRevRange(ZRevRangeRequest) returns (ZRevRangeResponse);
+  rpc ZRem(ZRemRequest) returns (ZRemResponse);
+
+  // --- Cluster Management ---
+  rpc AddNode(AddNodeRequest) returns (AddNodeResponse);
+  rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
+  
+  // --- Observability ---
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+// ─── Observability Messages ───
+message PingRequest {}
+message PingResponse {
+  string node_id = 1;
+  string state = 2; // "Leader", "Follower", "Candidate"
+  uint64 term = 3;
+}
+
+// ─── String Messages ───
+message SetRequest {
+  string key = 1;
+  string value = 2;
+  // Opsiyonel: TTL ms cinsinden. 0 ise kalıcı.
+  int64 ttl_ms = 3;
+}
+message SetResponse { bool success = 1; }
+
+message GetRequest {
+  string key = 1;
+}
+message GetResponse {
+  string value = 1;
+}
+
+message DeleteRequest {
+  string key = 1;
+}
+message DeleteResponse { bool success = 1; }
+
+message IncrRequest {
+  string key = 1;
+}
+message IncrResponse {
+  int64 new_value = 1;
+}
+
+message DecrRequest {
+  string key = 1;
+}
+message DecrResponse {
+  int64 new_value = 1;
+}
+
+// ─── Hash Messages ───
+message HSetRequest {
+  string key = 1;
+  string field = 2;
+  string value = 3;
+  int64 ttl_ms = 4;
+}
+message HSetResponse { bool success = 1; }
+
+message HGetRequest {
+  string key = 1;
+  string field = 2;
+}
+message HGetResponse {
+  string value = 1;
+}
+
+message HDeleteRequest {
+  string key = 1;
+  string field = 2;
+}
+message HDeleteResponse { bool success = 1; }
+
+message HGetAllRequest {
+  string key = 1;
+}
+message HGetAllResponse {
+  map<string, string> fields = 1;
+}
+
+message HExistsRequest {
+  string key = 1;
+  string field = 2;
+}
+message HExistsResponse {
+  bool exists = 1;
+}
+
+// ─── List Messages ───
+message LPushRequest {
+  string key = 1;
+  repeated string values = 2;
+  int64 ttl_ms = 3;
+}
+message LPushResponse { int64 count = 1; }
+
+message RPushRequest {
+  string key = 1;
+  repeated string values = 2;
+  int64 ttl_ms = 3;
+}
+message RPushResponse { int64 count = 1; }
+
+message LPopRequest {
+  string key = 1;
+}
+message LPopResponse {
+  string value = 1;
+}
+
+message RPopRequest {
+  string key = 1;
+}
+message RPopResponse {
+  string value = 1;
+}
+
+message LRangeRequest {
+  string key = 1;
+  int64 start = 2;
+  int64 stop = 3;
+}
+message LRangeResponse {
+  repeated string values = 1;
+}
+
+message LLenRequest {
+  string key = 1;
+}
+message LLenResponse {
+  int64 count = 1;
+}
+
+// ─── Sorted Set Messages ───
+message ZAddRequest {
+  string key = 1;
+  double score = 2;
+  string member = 3;
+  int64 ttl_ms = 4;
+}
+message ZAddResponse { bool success = 1; }
+
+message ZScoreRequest {
+  string key = 1;
+  string member = 2;
+}
+message ZScoreResponse {
+  double score = 1;
+}
+
+message ZRankRequest {
+  string key = 1;
+  string member = 2;
+}
+message ZRankResponse {
+  int64 rank = 1;
+}
+
+message ZRangeRequest {
+  string key = 1;
+  int64 start = 2;
+  int64 stop = 3;
+  bool with_scores = 4;
+}
+message ZRangeResponse {
+  repeated string members = 1;
+}
+
+message ZRevRangeRequest {
+  string key = 1;
+  int64 start = 2;
+  int64 stop = 3;
+  bool with_scores = 4;
+}
+message ZRevRangeResponse {
+  repeated string members = 1;
+}
+
+message ZRemRequest {
+  string key = 1;
+  string member = 2;
+}
+message ZRemResponse { bool success = 1; }
+
+// ─── Cluster Management Messages ───
+message AddNodeRequest {
+  string node_id = 1;
+  string address = 2;
+}
+message AddNodeResponse { bool success = 1; }
+
+message RemoveNodeRequest {
+  string node_id = 1;
+}
+message RemoveNodeResponse { bool success = 1; }
+
+// ─── Internal State Machine Messages (Protobuf End-to-End) ───
+
+// CommandPayload represents a command serialized in the Raft log.
+message CommandPayload {
+  string op = 1;
+  repeated string args = 2;
+}
+
+// ─── Snapshot Messages ───
+
+message HashData {
+  map<string, string> fields = 1;
+}
+
+message ListData {
+  repeated string elements = 1;
+}
+
+message ZSetEntry {
+  string member = 1;
+  double score = 2;
+}
+
+message ZSetData {
+  repeated ZSetEntry entries = 1;
+}
+
+// Snapshot represents the entire state of the KVStore.
+message Snapshot {
+  map<string, string> key_types = 1;
+  map<string, string> strings = 2;
+  map<string, HashData> hashes = 3;
+  map<string, ListData> lists = 4;
+  map<string, ZSetData> sorted_sets = 5;
+  // Unix timestamp (ms)
+  map<string, int64> ttls = 6;
+}

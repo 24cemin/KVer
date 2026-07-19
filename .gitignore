@@ -1,0 +1,41 @@
+# Generated protobuf files — repo'da tutulur, CI'da freshness kontrol edilir
+# (proto/kv/gen/ ve proto/raft/gen/ artık commit ediliyor)
+
+# WAL ve snapshot dosyaları — çalışma zamanında üretilir (gerçek uzantılar)
+*_wal.bin
+*_snapshot.bin
+*_snapshot_meta.json
+raft_state.json
+
+# Çalışma zamanı veri dizini
+data/
+
+# Go binary çıktıları
+/bin/
+/kvctl
+/server
+dist/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+*.swp
+
+# 3. Parti araç binary dizini
+.bin/
+
+# Test ve coverage çıktıları
+*.test
+*.out
+coverage.html
+
+# Geçici dosyalar
+*.tmp
+*.log
+
+# Kişisel geliştirici notları
+NOTES.md
