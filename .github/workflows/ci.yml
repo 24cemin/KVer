@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Lint ──────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Check go mod tidy
+        run: |
+          go mod tidy
+          if ! git diff --quiet go.mod go.sum; then
+            echo "❌ go.mod or go.sum is not tidy!"
+            echo "Run 'go mod tidy' and commit the changes."
+            git diff go.mod go.sum
+            exit 1
+          fi
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.2
+
+  # ─── Unit Test ─────────────────────────────────────────────────────────────────
+  unit-test:
+    name: Unit Test (Go ${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        go-version: ["1.23", "1.24"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      # Go 1.23: sadece test çalıştır
+      - name: Run unit tests
+        if: matrix.go-version != '1.24'
+        run: go test -race -count=1 ./internal/...
+
+      # Go 1.24: test + coverage üret
+      - name: Run unit tests with coverage
+        if: matrix.go-version == '1.24'
+        run: go test -race -count=1 -coverprofile=coverage.out ./internal/...
+
+      - name: Upload coverage artifact
+        if: matrix.go-version == '1.24'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  # ─── Build ─────────────────────────────────────────────────────────────────────
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Build all packages
+        run: go build ./...
+
+      - name: Build binaries
+        run: |
+          go build -o /dev/null ./cmd/server
+          go build -o /dev/null ./cmd/kvctl
+
+  # ─── Proto Freshness Check ────────────────────────────────────────────────────
+  proto-check:
+    name: Proto Freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.1"
+
+      - name: Install Go protoc plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.1
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+
+      - name: Regenerate proto files
+        run: bash scripts/gen_proto.sh
+
+      - name: Verify proto files are up-to-date
+        run: |
+          if ! git diff --quiet proto/; then
+            echo "❌ Generated proto files are stale!"
+            echo "Run 'make proto' and commit the results."
+            git diff proto/
+            exit 1
+          fi
+
+  # ─── Integration Test ─────────────────────────────────────────────────────────
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint, unit-test, build, proto-check]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Run integration tests
+        run: go test -race -count=1 -timeout 5m -v ./tests/integration/...
