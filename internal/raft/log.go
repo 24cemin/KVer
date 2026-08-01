@@ -5,6 +5,7 @@ package raft
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -16,15 +17,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-
-
 // RaftLog, Raft log kayıtlarını yönetir.
 type RaftLog struct {
 	mu      sync.RWMutex
 	entries []LogEntry
 
-	dataDir string // WAL dosyasının saklandığı dizin
-	nodeID  string // WAL dosyası adı için
+	dataDir string   // WAL dosyasının saklandığı dizin
+	nodeID  string   // WAL dosyası adı için
 	walFile *os.File // Açık tutulan WAL dosyası
 
 	// firstIndex, log'daki ilk entry'nin index'idir.
@@ -80,16 +79,16 @@ func (l *RaftLog) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.walFile != nil {
-		_ = l.walFile.Sync()
-		err := l.walFile.Close()
+		syncErr := l.walFile.Sync()
+		closeErr := l.walFile.Close()
 		l.walFile = nil
-		return err
+		return errors.Join(syncErr, closeErr)
 	}
 	return nil
 }
 
 // loadFromDisk, WAL dosyasını diskten okur ve entries alanını doldurur.
-func (l *RaftLog) loadFromDisk() error {
+func (l *RaftLog) loadFromDisk() (err error) {
 	f, err := os.Open(l.walPath())
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -97,7 +96,9 @@ func (l *RaftLog) loadFromDisk() error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		err = errors.Join(err, f.Close())
+	}()
 
 	l.entries = nil
 	for {

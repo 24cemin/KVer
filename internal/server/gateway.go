@@ -59,7 +59,9 @@ func NewGateway(addr string, client *sdk.Client) *Gateway {
 	// --- Health check ---
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK\n"))
+		if _, err := w.Write([]byte("OK\n")); err != nil {
+			log.Printf("failed to write health response: %v", err)
+		}
 	})
 
 	g.server = &http.Server{
@@ -97,7 +99,9 @@ func (g *Gateway) Stop() {
 	if g.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		g.server.Shutdown(ctx)
+		if err := g.server.Shutdown(ctx); err != nil {
+			log.Printf("failed to stop HTTP Gateway: %v", err)
+		}
 	}
 }
 
@@ -107,9 +111,16 @@ func (g *Gateway) respondError(w http.ResponseWriter, msg string, code int) {
 	http.Error(w, msg, code)
 }
 
-func (g *Gateway) respondSuccess(w http.ResponseWriter) {
+func (g *Gateway) respondJSON(w http.ResponseWriter, code int, value any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	w.WriteHeader(code)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("failed to encode HTTP JSON response: %v", err)
+	}
+}
+
+func (g *Gateway) respondSuccess(w http.ResponseWriter) {
+	g.respondJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
 type keyReq struct {
@@ -156,8 +167,7 @@ func (g *Gateway) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"value": val})
+	g.respondJSON(w, http.StatusOK, map[string]string{"value": val})
 }
 
 func (g *Gateway) handleDelete(w http.ResponseWriter, r *http.Request) {
@@ -188,8 +198,7 @@ func (g *Gateway) handleIncr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{"value": val})
+	g.respondJSON(w, http.StatusOK, map[string]int64{"value": val})
 }
 
 func (g *Gateway) handleDecr(w http.ResponseWriter, r *http.Request) {
@@ -205,8 +214,7 @@ func (g *Gateway) handleDecr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{"value": val})
+	g.respondJSON(w, http.StatusOK, map[string]int64{"value": val})
 }
 
 // ─── Hash Handlers ────────────────────────────────────────────────────────────
@@ -246,8 +254,7 @@ func (g *Gateway) handleHGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"value": val})
+	g.respondJSON(w, http.StatusOK, map[string]string{"value": val})
 }
 
 func (g *Gateway) handleHGetAll(w http.ResponseWriter, r *http.Request) {
@@ -263,8 +270,7 @@ func (g *Gateway) handleHGetAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]map[string]string{"fields": fields})
+	g.respondJSON(w, http.StatusOK, map[string]map[string]string{"fields": fields})
 }
 
 // ─── List Handlers ────────────────────────────────────────────────────────────
@@ -287,8 +293,7 @@ func (g *Gateway) handleLPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{"count": count})
+	g.respondJSON(w, http.StatusOK, map[string]int64{"count": count})
 }
 
 func (g *Gateway) handleRPush(w http.ResponseWriter, r *http.Request) {
@@ -304,8 +309,7 @@ func (g *Gateway) handleRPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{"count": count})
+	g.respondJSON(w, http.StatusOK, map[string]int64{"count": count})
 }
 
 func (g *Gateway) handleLPop(w http.ResponseWriter, r *http.Request) {
@@ -321,8 +325,7 @@ func (g *Gateway) handleLPop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"value": val})
+	g.respondJSON(w, http.StatusOK, map[string]string{"value": val})
 }
 
 func (g *Gateway) handleLRange(w http.ResponseWriter, r *http.Request) {
@@ -347,8 +350,7 @@ func (g *Gateway) handleLRange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string][]string{"values": vals})
+	g.respondJSON(w, http.StatusOK, map[string][]string{"values": vals})
 }
 
 // ─── Sorted Set Handlers ──────────────────────────────────────────────────────
@@ -396,8 +398,7 @@ func (g *Gateway) handleZRange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string][]string{"members": members})
+	g.respondJSON(w, http.StatusOK, map[string][]string{"members": members})
 }
 
 // ─── Cluster Management ───────────────────────────────────────────────────────
@@ -419,8 +420,7 @@ func (g *Gateway) handleAddNode(w http.ResponseWriter, r *http.Request) {
 		g.respondError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	g.respondSuccess(w)
 }
 
 func (g *Gateway) handleRemoveNode(w http.ResponseWriter, r *http.Request) {
@@ -439,6 +439,5 @@ func (g *Gateway) handleRemoveNode(w http.ResponseWriter, r *http.Request) {
 		g.respondError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	g.respondSuccess(w)
 }

@@ -18,10 +18,10 @@ type operation struct {
 func TestLinearizabilityWithPorcupine(t *testing.T) {
 	// Start an isolated in-memory 3-node cluster to bypass Docker networking constraints
 	_, _, cleanup := makeThreeNodeCluster(t, 7301)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	client := sdk.NewClient([]string{"127.0.0.1:7301", "127.0.0.1:7302", "127.0.0.1:7303"})
-	defer client.Close()
+	registerClientCleanup(t, client)
 
 	err := client.Set("ping", "pong", 0)
 	if err != nil {
@@ -66,10 +66,10 @@ func TestLinearizabilityWithPorcupine(t *testing.T) {
 			for j := 0; j < opsPerClient; j++ {
 				isWrite := j%2 == 0
 				val := fmt.Sprintf("val_%d_%d", clientID, j)
-				
+
 				invokeTime := time.Now().UnixNano()
 				var retValue string
-				
+
 				if isWrite {
 					_ = client.Set(key, val, 0)
 					retValue = val

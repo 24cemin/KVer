@@ -64,7 +64,9 @@ func makeSingleNodeServer(t *testing.T, grpcAddr, httpAddr string) (*server.Serv
 
 	cleanup := func() {
 		cancel()
-		sdkClient.Close()
+		if err := sdkClient.Close(); err != nil {
+			t.Errorf("failed to close gateway SDK client: %v", err)
+		}
 		node.Stop()
 		kv.Close()
 		time.Sleep(100 * time.Millisecond) // Cleanup bekle
@@ -78,11 +80,11 @@ func TestSDK_AllOperations(t *testing.T) {
 	httpAddr := "127.0.0.1:8901"
 
 	_, _, cleanup := makeSingleNodeServer(t, grpcAddr, httpAddr)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	// SDK Client oluştur
 	client := sdk.NewClient([]string{grpcAddr})
-	defer client.Close()
+	registerClientCleanup(t, client)
 
 	// --- String ---
 	err := client.Set("my_str", "hello", 0)

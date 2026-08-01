@@ -5,11 +5,11 @@ import "testing"
 func TestRaftLog_AppendAndGet(t *testing.T) {
 	t.Run("AppendAndGetSuccess", func(t *testing.T) {
 		l := newRaftLog()
-		l.Append(
+		requireNoError(t, l.Append(
 			LogEntry{Index: 1, Term: 1},
 			LogEntry{Index: 2, Term: 1},
 			LogEntry{Index: 3, Term: 2},
-		)
+		))
 
 		tests := []struct {
 			index uint64
@@ -46,10 +46,10 @@ func TestRaftLog_TruncateAfter(t *testing.T) {
 	t.Run("TruncateCorrectly", func(t *testing.T) {
 		l := newRaftLog()
 		for i := uint64(1); i <= 5; i++ {
-			l.Append(LogEntry{Index: i, Term: 1})
+			requireNoError(t, l.Append(LogEntry{Index: i, Term: 1}))
 		}
 
-		l.TruncateAfter(3)
+		requireNoError(t, l.TruncateAfter(3))
 		if l.LastIndex() != 3 {
 			t.Errorf("expected LastIndex 3, got %d", l.LastIndex())
 		}
@@ -73,12 +73,12 @@ func TestRaftLog_LastIndexAndTerm(t *testing.T) {
 			t.Errorf("empty log: expected index 0, term 0; got index %d, term %d", l.LastIndex(), l.LastTerm())
 		}
 
-		l.Append(LogEntry{Index: 1, Term: 1})
+		requireNoError(t, l.Append(LogEntry{Index: 1, Term: 1}))
 		if l.LastIndex() != 1 || l.LastTerm() != 1 {
 			t.Errorf("1 entry: expected index 1, term 1; got index %d, term %d", l.LastIndex(), l.LastTerm())
 		}
 
-		l.Append(LogEntry{Index: 2, Term: 2}, LogEntry{Index: 3, Term: 2})
+		requireNoError(t, l.Append(LogEntry{Index: 2, Term: 2}, LogEntry{Index: 3, Term: 2}))
 		if l.LastIndex() != 3 || l.LastTerm() != 2 {
 			t.Errorf("3 entries: expected index 3, term 2; got index %d, term %d", l.LastIndex(), l.LastTerm())
 		}
@@ -89,7 +89,7 @@ func TestRaftLog_GetEntriesFrom(t *testing.T) {
 	t.Run("GetEntriesFromSuccess", func(t *testing.T) {
 		l := newRaftLog()
 		for i := uint64(1); i <= 5; i++ {
-			l.Append(LogEntry{Index: i, Term: 1})
+			requireNoError(t, l.Append(LogEntry{Index: i, Term: 1}))
 		}
 
 		entries, err := l.GetEntriesFrom(3)

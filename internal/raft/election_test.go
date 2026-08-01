@@ -2,6 +2,8 @@ package raft
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -395,39 +397,42 @@ func TestElection_LeaderState_InitializedOnElection(t *testing.T) {
 		t.Fatalf("node should be leader, got %s", node.State())
 	}
 
-	// Wait for No-Op entry to be replicated
-	for i := 0; i < 100; i++ {
+	// Raft commits after a majority acknowledges the no-op, so commitIndex alone does
+	// not prove that every follower has finished replication. Wait for each peer.
+	const (
+		expectedNextIndex  = uint64(5)
+		expectedMatchIndex = uint64(4)
+	)
+	deadline := time.Now().Add(time.Second)
+	for {
+		allReplicated := true
 		node.mu.RLock()
-		if node.commitIndex >= 4 {
-			node.mu.RUnlock()
-			break
+		for peerID := range peers {
+			if peerID == node.config.NodeID {
+				continue
+			}
+			if node.nextIndex[peerID] != expectedNextIndex || node.matchIndex[peerID] != expectedMatchIndex {
+				allReplicated = false
+				break
+			}
 		}
 		node.mu.RUnlock()
+
+		if allReplicated {
+			break
+		}
+		if time.Now().After(deadline) {
+			node.mu.RLock()
+			statuses := make([]string, 0, len(peers)-1)
+			for peerID := range peers {
+				if peerID != node.config.NodeID {
+					statuses = append(statuses, fmt.Sprintf("%s(nextIndex=%d, matchIndex=%d)",
+						peerID, node.nextIndex[peerID], node.matchIndex[peerID]))
+				}
+			}
+			node.mu.RUnlock()
+			t.Fatalf("timed out waiting for follower replication: %s", strings.Join(statuses, ", "))
+		}
 		time.Sleep(10 * time.Millisecond)
-	}
-
-	node.mu.RLock()
-	defer node.mu.RUnlock()
-
-	// Raft §5.3 / §5.4.2: nextIndex is updated to 5 after No-Op entry is successfully replicated.
-	// Initial was 4, No-Op is at index 4, so matchIndex becomes 4, nextIndex becomes 5.
-	expectedNextIndex := uint64(5)
-	for peerID, ni := range node.nextIndex {
-		if peerID == node.config.NodeID {
-			continue
-		}
-		if ni != expectedNextIndex {
-			t.Errorf("nextIndex[%s] = %d, want %d", peerID, ni, expectedNextIndex)
-		}
-	}
-
-	// matchIndex[peer] = 4
-	for peerID, mi := range node.matchIndex {
-		if peerID == node.config.NodeID {
-			continue
-		}
-		if mi != 4 {
-			t.Errorf("matchIndex[%s] = %d, want 4", peerID, mi)
-		}
 	}
 }

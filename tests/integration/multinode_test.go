@@ -35,9 +35,9 @@ func makeThreeNodeCluster(t *testing.T, basePort int) ([]*server.Server, []*raft
 		cfg := &raft.Config{
 			NodeID:              nodeID,
 			Peers:               peers,
-			ElectionTimeoutMin: 150 * time.Millisecond,
-			ElectionTimeoutMax: 300 * time.Millisecond,
-			HeartbeatInterval: 50 * time.Millisecond,
+			ElectionTimeoutMin:  150 * time.Millisecond,
+			ElectionTimeoutMax:  300 * time.Millisecond,
+			HeartbeatInterval:   50 * time.Millisecond,
 			MaxLogEntriesPerRPC: 100,
 			SnapshotThreshold:   1000,
 			DataDir:             dataDir,
@@ -85,10 +85,10 @@ func makeThreeNodeCluster(t *testing.T, basePort int) ([]*server.Server, []*raft
 func TestMultiNode_ThreeNodeCluster_SetGet(t *testing.T) {
 	// Ports 7201-7203 reserved for this test
 	_, _, cleanup := makeThreeNodeCluster(t, 7201)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	client := sdk.NewClient([]string{"127.0.0.1:7201", "127.0.0.1:7202", "127.0.0.1:7203"})
-	defer client.Close()
+	registerClientCleanup(t, client)
 
 	if err := client.Set("cluster_key", "cluster_val", 0); err != nil {
 		t.Fatalf("SDK Set failed: %v", err)
@@ -104,7 +104,7 @@ func TestMultiNode_ThreeNodeCluster_SetGet(t *testing.T) {
 func TestMultiNode_SDK_LeaderDiscovery(t *testing.T) {
 	// Ports 7211-7213 reserved for this test
 	_, nodes, cleanup := makeThreeNodeCluster(t, 7211)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	var followerAddr string
 	var otherAddrs []string
@@ -119,7 +119,7 @@ func TestMultiNode_SDK_LeaderDiscovery(t *testing.T) {
 
 	addrs := append([]string{followerAddr}, otherAddrs...)
 	client := sdk.NewClient(addrs)
-	defer client.Close()
+	registerClientCleanup(t, client)
 
 	if err := client.Set("discover", "success", 0); err != nil {
 		t.Fatalf("Set to follower failed (should discover leader): %v", err)
@@ -135,13 +135,15 @@ func TestMultiNode_SDK_LeaderDiscovery(t *testing.T) {
 func TestMultiNode_DataConsistency(t *testing.T) {
 	// Ports 7221-7223 reserved for this test
 	_, _, cleanup := makeThreeNodeCluster(t, 7221)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	client := sdk.NewClient([]string{"127.0.0.1:7221", "127.0.0.1:7222", "127.0.0.1:7223"})
-	defer client.Close()
+	registerClientCleanup(t, client)
 
 	for i := 0; i < 10; i++ {
-		client.Set(fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i), 0)
+		if err := client.Set(fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i), 0); err != nil {
+			t.Fatalf("Set %d failed: %v", i, err)
+		}
 	}
 	time.Sleep(1000 * time.Millisecond)
 

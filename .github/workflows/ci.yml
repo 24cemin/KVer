@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -17,9 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.24"
           cache: true
@@ -35,39 +38,29 @@ jobs:
           fi
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.2
+          version: v2.12.0
+          args: --config=.golangci.yml
 
   # ─── Unit Test ─────────────────────────────────────────────────────────────────
   unit-test:
-    name: Unit Test (Go ${{ matrix.go-version }})
+    name: Unit Test (Go 1.24)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    strategy:
-      matrix:
-        go-version: ["1.23", "1.24"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: "1.24"
           cache: true
 
-      # Go 1.23: sadece test çalıştır
-      - name: Run unit tests
-        if: matrix.go-version != '1.24'
-        run: go test -race -count=1 ./internal/...
-
-      # Go 1.24: test + coverage üret
       - name: Run unit tests with coverage
-        if: matrix.go-version == '1.24'
         run: go test -race -count=1 -coverprofile=coverage.out ./internal/...
 
       - name: Upload coverage artifact
-        if: matrix.go-version == '1.24'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coverage
           path: coverage.out
@@ -78,12 +71,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.24"
           cache: true
+
+      - name: Run go vet
+        run: go vet ./...
 
       - name: Build all packages
         run: go build ./...
@@ -99,9 +95,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.24"
           cache: true
@@ -135,12 +131,30 @@ jobs:
     timeout-minutes: 10
     needs: [lint, unit-test, build, proto-check]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.24"
           cache: true
 
       - name: Run integration tests
         run: go test -race -count=1 -timeout 5m -v ./tests/integration/...
+
+  # ─── Automated E2E Test ───────────────────────────────────────────────────────
+  e2e-test:
+    name: Automated E2E Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint, unit-test, build, proto-check]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+
+      # Go benchmarks are compiled as part of this command but are not executed.
+      - name: Run automated E2E tests
+        run: go test -race -count=1 -timeout 5m -v ./tests/e2e/...

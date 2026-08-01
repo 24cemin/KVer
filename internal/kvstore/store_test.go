@@ -1,7 +1,6 @@
 package kvstore
 
 import (
-
 	"strconv"
 	"testing"
 	"time"
@@ -247,17 +246,13 @@ func TestKVStore_SnapshotAndRestore(t *testing.T) {
 		defer kv.Close()
 
 		// String ekle
-		kv.strings.Set("foo", "bar", 0)
-
+		requireNoError(t, kv.strings.Set("foo", "bar", 0))
 		// Hash ekle
-		kv.hashes.HSet("user:1", "name", "ali", 0)
-
+		requireNoError(t, kv.hashes.HSet("user:1", "name", "ali", 0))
 		// List ekle
-		kv.lists.LPush("queue", 0, "task1")
-
+		requireLPush(t, kv.lists, "queue", 0, "task1")
 		// SortedSet ekle
-		kv.sortedSets.ZAdd("scores", 100.0, "ali", 0)
-
+		requireNoError(t, kv.sortedSets.ZAdd("scores", 100.0, "ali", 0))
 		// Snapshot al
 		data, err := kv.Snapshot()
 		if err != nil {
