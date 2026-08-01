@@ -12,10 +12,10 @@ import (
 
 func TestLinearizabilityPartition(t *testing.T) {
 	_, nodes, cleanup := makeThreeNodeCluster(t, 7401)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	client := sdk.NewClient([]string{"127.0.0.1:7401", "127.0.0.1:7402", "127.0.0.1:7403"})
-	defer client.Close()
+	registerClientCleanup(t, client)
 
 	_ = client.Set("ping", "pong", 0)
 
@@ -42,16 +42,16 @@ func TestLinearizabilityPartition(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-    // Goroutine to partition (kill) a follower halfway through
+	// Goroutine to partition (kill) a follower halfway through
 	go func() {
 		time.Sleep(50 * time.Millisecond) // Wait a bit
-        // Find a follower and stop it
-        for _, n := range nodes {
-            if n.State() != 3 { // Assuming Leader is state 3 or just stop nodes[2]
-               n.Stop()
-               break
-            }
-        }
+		// Find a follower and stop it
+		for _, n := range nodes {
+			if n.State() != 3 { // Assuming Leader is state 3 or just stop nodes[2]
+				n.Stop()
+				break
+			}
+		}
 	}()
 
 	for i := 0; i < concurrency; i++ {
@@ -61,10 +61,10 @@ func TestLinearizabilityPartition(t *testing.T) {
 			for j := 0; j < opsPerClient; j++ {
 				isWrite := j%2 == 0
 				val := fmt.Sprintf("val_%d_%d", clientID, j)
-				
+
 				invokeTime := time.Now().UnixNano()
 				var retValue string
-				
+
 				if isWrite {
 					_ = client.Set(key, val, 0)
 					retValue = val

@@ -5,6 +5,8 @@ package raft
 
 import (
 	"context"
+	"errors"
+	"log"
 	"sync"
 	"time"
 )
@@ -183,7 +185,15 @@ func (r *RaftNode) Stop() {
 	r.wg.Wait()
 
 	if r.log != nil {
-		r.log.Close()
+		if err := r.log.Close(); err != nil {
+			log.Printf("[%s] failed to close Raft log: %v", r.config.NodeID, err)
+		}
+	}
+}
+
+func (r *RaftNode) replicateToAsync(ctx context.Context, peerID string, nextIndex uint64) {
+	if err := r.replicateTo(ctx, peerID, nextIndex); err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("[%s] replication to %s failed: %v", r.config.NodeID, peerID, err)
 	}
 }
 
@@ -219,7 +229,8 @@ func (r *RaftNode) initLeaderState() {
 		if peerID == r.config.NodeID {
 			continue
 		}
-		go r.replicateTo(ctx, peerID, r.nextIndex[peerID])
+		nextIndex := r.nextIndex[peerID]
+		go r.replicateToAsync(ctx, peerID, nextIndex)
 	}
 
 	r.advanceCommitIndex()
@@ -234,7 +245,7 @@ func (r *RaftNode) stepDown(term uint64) {
 		r.currentTerm = term
 		r.votedFor = ""
 	}
-	r.leaderID = "" // lider bilinmiyor artık
+	r.leaderID = ""         // lider bilinmiyor artık
 	r.noopCommitted = false // yeni liderlik döneminde sıfırla
 	r.lastHeartbeat = time.Now()
 	if r.persistentState != nil {
@@ -336,7 +347,7 @@ func (r *RaftNode) batchLoop() {
 				r.mu.RLock()
 				ni := r.nextIndex[id]
 				r.mu.RUnlock()
-				_ = r.replicateTo(ctx, id, ni)
+				r.replicateToAsync(ctx, id, ni)
 			}(peerID)
 		}
 

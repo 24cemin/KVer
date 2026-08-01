@@ -22,9 +22,9 @@ func makeSingleNodeKVCluster(t *testing.T) (*raft.RaftNode, *kvstore.KVStore, fu
 	cfg := &raft.Config{
 		NodeID:              id,
 		Peers:               peers,
-		HeartbeatInterval: 20 * time.Millisecond,
-		ElectionTimeoutMin: 150 * time.Millisecond,
-		ElectionTimeoutMax: 300 * time.Millisecond,
+		HeartbeatInterval:   20 * time.Millisecond,
+		ElectionTimeoutMin:  150 * time.Millisecond,
+		ElectionTimeoutMax:  300 * time.Millisecond,
 		MaxLogEntriesPerRPC: 100,
 	}
 
@@ -88,7 +88,7 @@ func proposeAndWait(t *testing.T, node *raft.RaftNode, op string, args ...string
 
 func TestKVStore_SetGetIntegration(t *testing.T) {
 	node, kv, cleanup := makeSingleNodeKVCluster(t)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	// Propose a SET command without explicit TTL
 	proposeAndWait(t, node, "SET", "mykey", "myval")
@@ -105,7 +105,7 @@ func TestKVStore_SetGetIntegration(t *testing.T) {
 
 func TestKVStore_TTLExpiry(t *testing.T) {
 	node, kv, cleanup := makeSingleNodeKVCluster(t)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	// Propose SET with absolute expiry: now + 100ms
 	expiryMs := time.Now().Add(100 * time.Millisecond).UnixMilli()
@@ -128,7 +128,7 @@ func TestKVStore_TTLExpiry(t *testing.T) {
 
 func TestKVStore_AllDataTypes(t *testing.T) {
 	node, kv, cleanup := makeSingleNodeKVCluster(t)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	// Hash
 	proposeAndWait(t, node, "HSET", "myhash", "field1", "val1")
@@ -152,7 +152,7 @@ func TestKVStore_AllDataTypes(t *testing.T) {
 
 func TestKVStore_SnapshotAndRestore(t *testing.T) {
 	node, kv, cleanup := makeSingleNodeKVCluster(t)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	// Veri ekle — string, hash, list
 	proposeAndWait(t, node, "SET", "mykey", "myval")
@@ -200,4 +200,3 @@ func TestKVStore_SnapshotAndRestore(t *testing.T) {
 		t.Errorf("SortedSet restore failed: score=%v err=%v", score, err)
 	}
 }
-

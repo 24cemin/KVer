@@ -33,7 +33,7 @@ func main() {
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
 			if client != nil {
-				client.Close()
+				return client.Close()
 			}
 			return nil
 		},

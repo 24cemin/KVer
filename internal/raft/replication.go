@@ -5,7 +5,6 @@ package raft
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 )
@@ -56,7 +55,6 @@ func (r *RaftNode) replicateTo(ctx context.Context, peerID string, nextIndex uin
 		resp, err := r.transport.AppendEntries(rpcCtx, peerID, req)
 		cancel()
 		if err != nil {
-			log.Printf("[%s] replicateTo %s failed: %v", r.config.NodeID, peerID, err)
 			return err
 		}
 
@@ -138,7 +136,7 @@ func (r *RaftNode) sendHeartbeatOnce(ctx context.Context) {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			rpcCtx, cancel := context.WithTimeout(ctx, r.config.HeartbeatInterval * 2)
+			rpcCtx, cancel := context.WithTimeout(ctx, r.config.HeartbeatInterval*2)
 			defer cancel()
 
 			req := &AppendEntriesRequest{

@@ -4,6 +4,7 @@ package sdk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -44,11 +45,14 @@ func (c *Client) Close() error {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
 
+	var closeErrs []error
 	for addr, conn := range c.conns {
-		conn.Close()
+		if err := conn.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("close connection %s: %w", addr, err))
+		}
 		delete(c.conns, addr)
 	}
-	return nil
+	return errors.Join(closeErrs...)
 }
 
 // getConn, belirtilen adres için cached gRPC bağlantısı döndürür.
@@ -530,7 +534,6 @@ func (c *Client) ClusterStatus() (string, error) {
 	}
 	return result, nil
 }
-
 
 // AddNode, cluster'a yeni bir node ekler.
 func (c *Client) AddNode(nodeID, addr string) error {

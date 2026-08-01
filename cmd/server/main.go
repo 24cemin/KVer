@@ -64,7 +64,7 @@ func main() {
 		MaxLogEntriesPerRPC:  100,
 		SnapshotThreshold:    1000,
 		DataDir:              nodeDataDir,
-		SyncWrites:           true, // Production'da her zaman true olmalıdır (Raft Safety Guarantee)
+		SyncWrites:           true,            // Production'da her zaman true olmalıdır (Raft Safety Guarantee)
 		InitialElectionDelay: 1 * time.Second, // Docker bridge/gRPC kurulum süresi
 	}
 
@@ -96,7 +96,11 @@ func main() {
 		allAddrs = append(allAddrs, pAddr)
 	}
 	sdkClient := sdk.NewClient(allAddrs)
-	defer sdkClient.Close()
+	defer func() {
+		if err := sdkClient.Close(); err != nil {
+			log.Printf("failed to close SDK client: %v", err)
+		}
+	}()
 
 	gateway := server.NewGateway(*httpAddr, sdkClient)
 

@@ -63,7 +63,7 @@ func TestSnapshot_TakeSnapshot(t *testing.T) {
 		cfg := testConfig("node1", nil)
 		sm := &snapshotMockStateMachine{}
 		node, _ := NewRaftNode(cfg, sm, &mockTransport{})
-		
+
 		err := node.takeSnapshot()
 		if err != nil {
 			t.Fatalf("expected nil error, got %v", err)
@@ -92,8 +92,8 @@ func TestSnapshot_HandleInstallSnapshot(t *testing.T) {
 		}
 
 		resp := node.handleInstallSnapshot(req)
-		if resp.Term != 0 { // current term is 0 initially in tests
-			// well, if term changes it becomes req.Term
+		if resp.Term != req.Term {
+			t.Errorf("expected response term %d, got %d", req.Term, resp.Term)
 		}
 
 		node.mu.RLock()
@@ -211,7 +211,7 @@ func TestSnapshot_PersistAndLoad(t *testing.T) {
 	t.Run("Basic", func(t *testing.T) {
 		cfg := testConfig("node1", nil)
 		cfg.DataDir = t.TempDir()
-		
+
 		sm := &snapshotMockStateMachine{snapshotData: []byte("disk-snap")}
 		node, _ := NewRaftNode(cfg, sm, &mockTransport{})
 		node.mu.Lock()
@@ -222,7 +222,7 @@ func TestSnapshot_PersistAndLoad(t *testing.T) {
 		for i := 1; i <= 5; i++ {
 			_ = node.log.Append(LogEntry{Index: uint64(i), Term: 1})
 		}
-		
+
 		if err := node.takeSnapshot(); err != nil {
 			t.Fatalf("takeSnapshot err: %v", err)
 		}
@@ -277,7 +277,7 @@ func TestSnapshot_WAL_PersistAndReload(t *testing.T) {
 		if l2.LastIndex() != 3 {
 			t.Errorf("expected LastIndex 3, got %d", l2.LastIndex())
 		}
-		
+
 		entry, _ := l2.GetEntry(2)
 		if entry.Term != 2 {
 			t.Errorf("expected term 2, got %d", entry.Term)

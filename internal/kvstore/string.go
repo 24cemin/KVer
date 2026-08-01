@@ -1,6 +1,7 @@
 package kvstore
 
 import (
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -26,7 +27,9 @@ func NewStringStore(kv *KVStore, ttl *TTLManager) *StringStore {
 // Set sets the string value of a key.
 func (s *StringStore) Set(key, value string, ttl time.Duration) error {
 	if s.ttl.IsExpired(key) {
-		s.Delete(key)
+		if err := s.Delete(key); err != nil && !errors.Is(err, ErrKeyNotFound) {
+			return err
+		}
 	}
 
 	s.mu.Lock()
@@ -51,7 +54,9 @@ func (s *StringStore) Get(key string) (string, error) {
 	}
 
 	if s.ttl.IsExpired(key) {
-		s.Delete(key) // Auto-cleanup on read
+		if err := s.Delete(key); err != nil && !errors.Is(err, ErrKeyNotFound) {
+			return "", err
+		}
 		return "", ErrKeyNotFound
 	}
 
@@ -96,7 +101,9 @@ func (s *StringStore) Decr(key string) (int64, error) {
 func (s *StringStore) addValue(key string, delta int64) (int64, error) {
 	expired := s.ttl.IsExpired(key)
 	if expired {
-		s.Delete(key)
+		if err := s.Delete(key); err != nil && !errors.Is(err, ErrKeyNotFound) {
+			return 0, err
+		}
 	}
 
 	s.mu.Lock()
@@ -119,7 +126,7 @@ func (s *StringStore) addValue(key string, delta int64) (int64, error) {
 
 	newVal := val + delta
 	s.data[key] = strconv.FormatInt(newVal, 10)
-	
+
 	// Incrementing operations do not typically change the TTL in Redis,
 	// so we leave it as is if it exists. If it didn't exist, it has no TTL.
 	return newVal, nil

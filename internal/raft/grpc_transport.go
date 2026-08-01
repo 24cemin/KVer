@@ -6,6 +6,7 @@ package raft
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -69,7 +70,9 @@ func (t *GRPCTransport) Close() {
 	defer t.connMu.Unlock()
 
 	for addr, conn := range t.conns {
-		conn.Close()
+		if err := conn.Close(); err != nil {
+			log.Printf("failed to close Raft connection %s: %v", addr, err)
+		}
 		delete(t.conns, addr)
 	}
 }
@@ -201,7 +204,9 @@ func (t *GRPCTransport) RemovePeer(nodeID string) {
 	if ok {
 		t.connMu.Lock()
 		if conn, exists := t.conns[addr]; exists {
-			conn.Close()
+			if err := conn.Close(); err != nil {
+				log.Printf("failed to close removed peer %s connection %s: %v", nodeID, addr, err)
+			}
 			delete(t.conns, addr)
 		}
 		t.connMu.Unlock()

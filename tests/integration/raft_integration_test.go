@@ -120,9 +120,9 @@ func makeCluster(t *testing.T, n int) ([]*raft.RaftNode, *localTransport, func()
 		cfg := &raft.Config{
 			NodeID:              id,
 			Peers:               nodePeers,
-			HeartbeatInterval: 20 * time.Millisecond,
-			ElectionTimeoutMin: 150 * time.Millisecond,
-			ElectionTimeoutMax: 300 * time.Millisecond,
+			HeartbeatInterval:   20 * time.Millisecond,
+			ElectionTimeoutMin:  150 * time.Millisecond,
+			ElectionTimeoutMax:  300 * time.Millisecond,
 			MaxLogEntriesPerRPC: 100,
 		}
 		node, err := raft.NewRaftNode(cfg, &mockSM{}, transport)
@@ -165,7 +165,7 @@ func waitForLeader(t *testing.T, nodes []*raft.RaftNode, timeout time.Duration) 
 
 func TestRaft_ThreeNodeElection(t *testing.T) {
 	nodes, _, cleanup := makeCluster(t, 3)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	leader := waitForLeader(t, nodes, 3*time.Second)
 
@@ -192,7 +192,7 @@ func TestRaft_ThreeNodeElection(t *testing.T) {
 
 func TestRaft_LogReplication(t *testing.T) {
 	nodes, _, cleanup := makeCluster(t, 3)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	leader := waitForLeader(t, nodes, 3*time.Second)
 
@@ -222,7 +222,7 @@ func TestRaft_LogReplication(t *testing.T) {
 
 func TestRaft_LeaderFailover(t *testing.T) {
 	nodes, _, cleanup := makeCluster(t, 3)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	leader := waitForLeader(t, nodes, 3*time.Second)
 
@@ -248,7 +248,7 @@ func TestRaft_LeaderFailover(t *testing.T) {
 
 func TestRaft_NetworkPartition(t *testing.T) {
 	nodes, transport, cleanup := makeCluster(t, 3)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	leader := waitForLeader(t, nodes, 3*time.Second)
 
@@ -294,7 +294,7 @@ func TestRaft_MembershipChange_E2E(t *testing.T) {
 		Peers:              map[string]string{}, // Single node initially
 		ElectionTimeoutMin: 150 * time.Millisecond,
 		ElectionTimeoutMax: 300 * time.Millisecond,
-		HeartbeatInterval: 20 * time.Millisecond,
+		HeartbeatInterval:  20 * time.Millisecond,
 	}
 	sm1 := &mockSM{}
 	node1, err := raft.NewRaftNode(cfg1, sm1, transport)
@@ -316,7 +316,7 @@ func TestRaft_MembershipChange_E2E(t *testing.T) {
 		Peers:              map[string]string{}, // Boş başlatıyoruz
 		ElectionTimeoutMin: 150 * time.Millisecond,
 		ElectionTimeoutMax: 300 * time.Millisecond,
-		HeartbeatInterval: 20 * time.Millisecond,
+		HeartbeatInterval:  20 * time.Millisecond,
 	}
 	sm2 := &mockSM{}
 	node2, err := raft.NewRaftNode(cfg2, sm2, transport)

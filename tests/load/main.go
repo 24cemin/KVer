@@ -28,10 +28,7 @@ func main() {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			for {
-				if time.Since(start) > duration {
-					break
-				}
+			for time.Since(start) <= duration {
 				key := fmt.Sprintf("key_%d", workerID)
 				val := "val"
 
