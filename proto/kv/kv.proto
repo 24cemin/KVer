@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package kv;
 
-option go_package = "github.com/emin/kver/proto/kv/gen;kvpb";
+option go_package = "github.com/24cemin/KVer/proto/kv/gen;kvpb";
 
 // KVService: Dış dünyaya açılan (Client-facing) API
 service KVService {

@@ -8,10 +8,10 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/emin/kver/internal/kvstore"
-	"github.com/emin/kver/internal/raft"
-	kvpb "github.com/emin/kver/proto/kv/gen"
-	raftpb "github.com/emin/kver/proto/raft/gen"
+	"github.com/24cemin/KVer/internal/kvstore"
+	"github.com/24cemin/KVer/internal/raft"
+	kvpb "github.com/24cemin/KVer/proto/kv/gen"
+	raftpb "github.com/24cemin/KVer/proto/raft/gen"
 )
 
 // ServerConfig, sunucu yapılandırma parametrelerini tutar.

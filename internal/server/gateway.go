@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/emin/kver/pkg/sdk"
+	"github.com/24cemin/KVer/pkg/sdk"
 )
 
 // Gateway, REST-to-gRPC dönüşümünü sağlayan HTTP handler'dır.

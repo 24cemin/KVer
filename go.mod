@@ -1,4 +1,4 @@
-module github.com/emin/kver
+module github.com/24cemin/KVer
 
 go 1.24.0
 

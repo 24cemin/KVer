@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emin/kver/internal/kvstore"
-	"github.com/emin/kver/internal/raft"
-	"github.com/emin/kver/internal/server"
-	"github.com/emin/kver/pkg/sdk"
+	"github.com/24cemin/KVer/internal/kvstore"
+	"github.com/24cemin/KVer/internal/raft"
+	"github.com/24cemin/KVer/internal/server"
+	"github.com/24cemin/KVer/pkg/sdk"
 )
 
 func makeSingleNodeServer(t *testing.T, grpcAddr, httpAddr string) (*server.Server, *server.Gateway, func()) {

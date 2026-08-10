@@ -6,8 +6,8 @@ package server
 import (
 	"context"
 
-	"github.com/emin/kver/internal/raft"
-	raftpb "github.com/emin/kver/proto/raft/gen"
+	"github.com/24cemin/KVer/internal/raft"
+	raftpb "github.com/24cemin/KVer/proto/raft/gen"
 )
 
 // RaftHandler, Raft gRPC servisini implement eder.

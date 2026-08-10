@@ -3,7 +3,7 @@ package raft
 import (
 	"testing"
 
-	kvpb "github.com/emin/kver/proto/kv/gen"
+	kvpb "github.com/24cemin/KVer/proto/kv/gen"
 	"google.golang.org/protobuf/proto"
 )
 
