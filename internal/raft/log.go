@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	raftpb "github.com/emin/kver/proto/raft/gen"
+	raftpb "github.com/24cemin/KVer/proto/raft/gen"
 	"google.golang.org/protobuf/proto"
 )
 

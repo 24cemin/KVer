@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package raft;
 
-option go_package = "github.com/emin/kver/proto/raft/gen;raftpb";
+option go_package = "github.com/24cemin/KVer/proto/raft/gen;raftpb";
 
 // ─── Log Entry ───────────────────────────────────────────────────────────────
 

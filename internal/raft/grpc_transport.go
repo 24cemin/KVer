@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	raftpb "github.com/emin/kver/proto/raft/gen"
+	raftpb "github.com/24cemin/KVer/proto/raft/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"

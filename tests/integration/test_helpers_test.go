@@ -3,7 +3,7 @@ package integration
 import (
 	"testing"
 
-	"github.com/emin/kver/pkg/sdk"
+	"github.com/24cemin/KVer/pkg/sdk"
 )
 
 func registerClientCleanup(t *testing.T, client *sdk.Client) {

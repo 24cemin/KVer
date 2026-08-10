@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/emin/kver/internal/kvstore"
-	"github.com/emin/kver/internal/raft"
-	kvpb "github.com/emin/kver/proto/kv/gen"
+	"github.com/24cemin/KVer/internal/kvstore"
+	"github.com/24cemin/KVer/internal/raft"
+	kvpb "github.com/24cemin/KVer/proto/kv/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
