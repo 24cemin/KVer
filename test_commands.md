@@ -178,6 +178,7 @@ kv zrange scores 0 -1
 Verifies that data is not lost when a server crashes (as long as quorum is maintained) and that the recovered node catches up on missed entries.
 
 ```bash
+kv set failovertest before-failover
 # Step 1: Stop node1
 docker compose stop node1
 
