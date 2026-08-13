@@ -217,7 +217,7 @@ func (l *ListStore) LRange(key string, start, stop int) ([]string, error) {
 	}
 
 	res := make([]string, 0, stop-start+1)
-	
+
 	curr := ll.Front()
 	for i := 0; i <= stop; i++ {
 		if i >= start {
@@ -230,6 +230,7 @@ func (l *ListStore) LRange(key string, start, stop int) ([]string, error) {
 }
 
 // LLen returns the length of the list stored at key.
+// Missing, expired, and empty lists have length zero.
 func (l *ListStore) LLen(key string) (int64, error) {
 	if err := l.kv.CheckType(key, "list"); err != nil {
 		return 0, err
@@ -237,7 +238,7 @@ func (l *ListStore) LLen(key string) (int64, error) {
 
 	if l.ttl.IsExpired(key) {
 		l.deleteKey(key)
-		return 0, ErrKeyNotFound
+		return 0, nil
 	}
 
 	l.mu.RLock()
@@ -245,7 +246,7 @@ func (l *ListStore) LLen(key string) (int64, error) {
 
 	ll, exists := l.data[key]
 	if !exists {
-		return 0, ErrKeyNotFound
+		return 0, nil
 	}
 
 	return int64(ll.Len()), nil

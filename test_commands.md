@@ -328,7 +328,18 @@ kv lpop templist   # list is already empty
 # Expected: Second lpop may return an error or empty response
 kv llen templist
 # Expected: 0
+
+# Missing key behavior
+kv llen missing-list
+# Expected: 0
+
+# Wrong-type behavior
+kv set scalar value
+kv llen scalar
+# Expected: wrong-type error
 ```
+
+`LLEN` returns `0` without an error for missing, expired, and existing empty lists. A key holding another value type returns a wrong-type error.
 
 ---
 

@@ -181,6 +181,22 @@ Sorted Set: zadd, zrem, zscore, zrank, zrange, zrevrange
 Cluster:    cluster status, cluster add-node, cluster remove-node
 ```
 
+### LLEN Contract
+
+`LLEN` has the same behavior in the storage layer, gRPC API, Go SDK, and CLI:
+
+| Key state | Result |
+|---|---|
+| Missing key | `0`, no error |
+| Expired list | `0`, no error |
+| Existing empty list | `0`, no error |
+| Key holding another value type | Wrong-type error (`FailedPrecondition` over gRPC) |
+| Existing list | Current list length |
+
+The CLI prints the successful numeric result, including `0` for missing, expired, and empty lists.
+
+The SDK retries `LLEN` on another configured endpoint only for `Unavailable` and `DeadlineExceeded`. Each endpoint must complete the leader `ReadIndex` path or forward the request at most once; followers never fall back to local state. If no usable leader or quorum is available, the read fails instead of returning potentially stale data.
+
 ---
 
 ## Development

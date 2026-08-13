@@ -153,9 +153,65 @@ func (c *Client) doWrite(fn func(context.Context, kvpb.KVServiceClient) error) e
 	return fmt.Errorf("no leader found in cluster")
 }
 
-// doRead, okuma operasyonunu leader'a gönderir (linearizable okuma için).
+// doRead, linearizable okumayı transient hatalarda başka endpoint üzerinde tekrarlar.
+// Başarılı bir endpoint follower üzerinden forward etmiş olabileceği için leader cache güncellenmez.
 func (c *Client) doRead(fn func(context.Context, kvpb.KVServiceClient) error) error {
-	return c.doWrite(fn)
+	const maxRetries = 4
+	baseDelay := 50 * time.Millisecond
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		c.mu.RLock()
+		leader := c.leader
+		allNodes := append([]string(nil), c.nodes...)
+		c.mu.RUnlock()
+
+		candidates := make([]string, 0, len(allNodes)+1)
+		if leader != "" {
+			candidates = append(candidates, leader)
+		}
+		for _, node := range allNodes {
+			if node != leader {
+				candidates = append(candidates, node)
+			}
+		}
+
+		for _, addr := range candidates {
+			conn, err := c.getConn(addr)
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+			err = fn(ctx, kvpb.NewKVServiceClient(conn))
+			cancel()
+			if err == nil {
+				return nil
+			}
+			if !isRetryableReadError(err) {
+				return err
+			}
+			lastErr = err
+		}
+
+		if attempt < maxRetries-1 && lastErr != nil {
+			time.Sleep(baseDelay)
+			baseDelay *= 2
+		}
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+	return errors.New("no nodes configured")
+}
+
+func isRetryableReadError(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	return st.Code() == codes.Unavailable || st.Code() == codes.DeadlineExceeded
 }
 
 // ─── String Operations ────────────────────────────────────────────────────────
@@ -369,7 +425,8 @@ func (c *Client) RPop(key string) (string, error) {
 	return result, err
 }
 
-// LLen, listenin uzunluğunu döndürür.
+// LLen returns the list length. Missing, expired, and empty lists return zero.
+// Keys holding another value type return an error.
 func (c *Client) LLen(key string) (int64, error) {
 	var result int64
 	err := c.doRead(func(ctx context.Context, client kvpb.KVServiceClient) error {

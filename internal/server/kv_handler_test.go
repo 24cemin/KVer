@@ -2,12 +2,17 @@ package server
 
 import (
 	"context"
+	"net"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/24cemin/KVer/internal/kvstore"
 	"github.com/24cemin/KVer/internal/raft"
 	kvpb "github.com/24cemin/KVer/proto/kv/gen"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -15,14 +20,19 @@ import (
 // ─── Mock helpers ─────────────────────────────────────────────────────────────
 
 type mockKVReader struct {
-	strings map[string]string
-	hashes  map[string]map[string]string
+	strings     map[string]string
+	hashes      map[string]map[string]string
+	listLengths map[string]int64
+	listErrors  map[string]error
+	llenCalls   atomic.Int64
 }
 
 func newMockKVReader() *mockKVReader {
 	return &mockKVReader{
-		strings: make(map[string]string),
-		hashes:  make(map[string]map[string]string),
+		strings:     make(map[string]string),
+		hashes:      make(map[string]map[string]string),
+		listLengths: make(map[string]int64),
+		listErrors:  make(map[string]error),
 	}
 }
 
@@ -53,11 +63,17 @@ func (m *mockKVReader) HExists(key, field string) (bool, error) {
 	_, exists := h[field]
 	return exists, nil
 }
-func (m *mockKVReader) LRange(_ string, _, _ int) ([]string, error)          { return nil, nil }
-func (m *mockKVReader) LLen(_ string) (int64, error)                         { return 0, nil }
-func (m *mockKVReader) ZScore(_, _ string) (float64, error)                  { return 0, nil }
-func (m *mockKVReader) ZRank(_, _ string) (int, error)                       { return 0, nil }
-func (m *mockKVReader) ZRange(_ string, _, _ int, _ bool) ([]string, error)  { return nil, nil }
+func (m *mockKVReader) LRange(_ string, _, _ int) ([]string, error) { return nil, nil }
+func (m *mockKVReader) LLen(key string) (int64, error) {
+	m.llenCalls.Add(1)
+	if err := m.listErrors[key]; err != nil {
+		return 0, err
+	}
+	return m.listLengths[key], nil
+}
+func (m *mockKVReader) ZScore(_, _ string) (float64, error)                    { return 0, nil }
+func (m *mockKVReader) ZRank(_, _ string) (int, error)                         { return 0, nil }
+func (m *mockKVReader) ZRange(_ string, _, _ int, _ bool) ([]string, error)    { return nil, nil }
 func (m *mockKVReader) ZRevRange(_ string, _, _ int, _ bool) ([]string, error) { return nil, nil }
 
 type mockProposerT struct {
@@ -156,6 +172,122 @@ func TestKVHandler_HExists_ReadsFromStore(t *testing.T) {
 	resp, _ = h.HExists(context.Background(), &kvpb.HExistsRequest{Key: "h", Field: "missing"})
 	if resp.Exists {
 		t.Error("expected HExists=false for missing field")
+	}
+}
+
+func TestKVHandler_LLen_ReturnsStoreCount(t *testing.T) {
+	reader := newMockKVReader()
+	reader.listLengths["queue"] = 3
+	h := newKVHandler(&mockProposerT{isLeader: true}, reader)
+
+	tests := []struct {
+		name      string
+		key       string
+		wantCount int64
+	}{
+		{name: "missing list", key: "missing", wantCount: 0},
+		{name: "normal list", key: "queue", wantCount: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resp, err := h.LLen(context.Background(), &kvpb.LLenRequest{Key: test.key})
+			if err != nil {
+				t.Fatalf("LLen failed: %v", err)
+			}
+			if resp.Count != test.wantCount {
+				t.Errorf("expected count %d, got %d", test.wantCount, resp.Count)
+			}
+		})
+	}
+}
+
+func TestKVHandler_LLen_WrongType(t *testing.T) {
+	reader := newMockKVReader()
+	reader.listErrors["string-key"] = kvstore.ErrWrongType
+	h := newKVHandler(&mockProposerT{isLeader: true}, reader)
+
+	_, err := h.LLen(context.Background(), &kvpb.LLenRequest{Key: "string-key"})
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.FailedPrecondition {
+		t.Errorf("expected FailedPrecondition, got %v", err)
+	}
+}
+
+func TestKVHandler_LLen_NoKnownLeaderDoesNotReadLocalStore(t *testing.T) {
+	reader := newMockKVReader()
+	reader.listLengths["queue"] = 99
+	h := newKVHandler(&mockProposerT{isLeader: false}, reader)
+
+	_, err := h.LLen(context.Background(), &kvpb.LLenRequest{Key: "queue"})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable, got %v", err)
+	}
+	if got := reader.llenCalls.Load(); got != 0 {
+		t.Fatalf("follower read local store %d times", got)
+	}
+}
+
+func TestKVHandler_LLen_ForwardingLimitDoesNotReadLocalStore(t *testing.T) {
+	reader := newMockKVReader()
+	reader.listLengths["queue"] = 99
+	h := newKVHandler(&mockProposerT{isLeader: false, leaderAddr: "127.0.0.1:1"}, reader)
+	ctx := metadata.NewIncomingContext(
+		context.Background(),
+		metadata.Pairs(forwardedReadMetadataKey, "1"),
+	)
+
+	_, err := h.LLen(ctx, &kvpb.LLenRequest{Key: "queue"})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable, got %v", err)
+	}
+	if got := reader.llenCalls.Load(); got != 0 {
+		t.Fatalf("follower read local store %d times", got)
+	}
+}
+
+func TestKVHandler_LLen_ForwardsToLeaderWithoutReadingFollower(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	leaderReader := newMockKVReader()
+	leaderReader.listLengths["queue"] = 3
+	leaderHandler := newKVHandler(&mockProposerT{isLeader: true}, leaderReader)
+	grpcServer := grpc.NewServer()
+	kvpb.RegisterKVServiceServer(grpcServer, leaderHandler)
+	go func() {
+		_ = grpcServer.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		leaderHandler.Close()
+		_ = listener.Close()
+	})
+
+	followerReader := newMockKVReader()
+	followerReader.listLengths["queue"] = 99
+	followerHandler := newKVHandler(
+		&mockProposerT{isLeader: false, leaderAddr: listener.Addr().String()},
+		followerReader,
+	)
+	t.Cleanup(followerHandler.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := followerHandler.LLen(ctx, &kvpb.LLenRequest{Key: "queue"})
+	if err != nil {
+		t.Fatalf("LLen through follower failed: %v", err)
+	}
+	if resp.Count != 3 {
+		t.Fatalf("expected leader count 3, got %d", resp.Count)
+	}
+	if got := followerReader.llenCalls.Load(); got != 0 {
+		t.Fatalf("follower read local store %d times", got)
+	}
+	if got := leaderReader.llenCalls.Load(); got != 1 {
+		t.Fatalf("expected one leader read, got %d", got)
 	}
 }
 

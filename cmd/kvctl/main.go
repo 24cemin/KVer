@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +18,11 @@ var (
 	nodes  string
 	client *sdk.Client
 )
+
+func writeLLenResult(writer io.Writer, length int64) error {
+	_, err := fmt.Fprintln(writer, length)
+	return err
+}
 
 func main() {
 	root := &cobra.Command{
@@ -266,8 +272,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			fmt.Println(n)
-			return nil
+			return writeLLenResult(cmd.OutOrStdout(), n)
 		},
 	}
 
