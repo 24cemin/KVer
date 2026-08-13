@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/24cemin/KVer/internal/raft"
 	"github.com/24cemin/KVer/internal/server"
 	"github.com/24cemin/KVer/pkg/sdk"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func makeSingleNodeServer(t *testing.T, grpcAddr, httpAddr string) (*server.Server, *server.Gateway, func()) {
@@ -128,6 +131,23 @@ func TestSDK_AllOperations(t *testing.T) {
 	// LPush(a,b) -> [b,a]. LPop -> b
 	if err != nil || lval != "b" {
 		t.Fatalf("SDK LPop failed: val=%s err=%v", lval, err)
+	}
+
+	listLength, err := client.LLen("my_list")
+	if err != nil || listLength != 1 {
+		t.Fatalf("SDK LLen failed for normal list: length=%d err=%v", listLength, err)
+	}
+
+	missingLength, err := client.LLen("missing_list")
+	if err != nil || missingLength != 0 {
+		t.Fatalf("SDK LLen failed for missing list: length=%d err=%v", missingLength, err)
+	}
+
+	if _, err = client.LLen("my_str"); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("SDK LLen expected FailedPrecondition for wrong type, got %v", err)
+	}
+	if message := status.Convert(err).Message(); !strings.Contains(message, kvstore.ErrWrongType.Error()) {
+		t.Fatalf("SDK LLen wrong-type message %q does not contain %q", message, kvstore.ErrWrongType)
 	}
 
 	// --- ZSet ---

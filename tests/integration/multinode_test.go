@@ -154,3 +154,36 @@ func TestMultiNode_DataConsistency(t *testing.T) {
 		}
 	}
 }
+
+func TestMultiNode_LLenThroughFollowerForwardsToLeader(t *testing.T) {
+	// Ports 7231-7233 reserved for this test
+	_, nodes, cleanup := makeThreeNodeCluster(t, 7231)
+	t.Cleanup(cleanup)
+
+	clusterClient := sdk.NewClient([]string{"127.0.0.1:7231", "127.0.0.1:7232", "127.0.0.1:7233"})
+	registerClientCleanup(t, clusterClient)
+	if _, err := clusterClient.RPush("forwarded-list", "a", "b"); err != nil {
+		t.Fatalf("RPush failed: %v", err)
+	}
+
+	var followerAddr string
+	for i, node := range nodes {
+		if node.State() != raft.Leader {
+			followerAddr = fmt.Sprintf("127.0.0.1:%d", 7231+i)
+			break
+		}
+	}
+	if followerAddr == "" {
+		t.Fatal("no follower found")
+	}
+
+	followerClient := sdk.NewClient([]string{followerAddr})
+	registerClientCleanup(t, followerClient)
+	length, err := followerClient.LLen("forwarded-list")
+	if err != nil {
+		t.Fatalf("LLen through follower failed: %v", err)
+	}
+	if length != 2 {
+		t.Fatalf("expected forwarded list length 2, got %d", length)
+	}
+}

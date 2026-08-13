@@ -22,9 +22,12 @@ import (
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
+
+const forwardedReadMetadataKey = "kver-read-forwarded"
 
 // RaftProposer defines the minimal set of Raft operations needed by the KVHandler.
 type RaftProposer interface {
@@ -114,17 +117,21 @@ func (h *KVHandler) forwardWrite(ctx context.Context, fn func(kvpb.KVServiceClie
 	return fn(client)
 }
 
-// forwardRead, okuma isteğini lider adresine forward eder.
-func (h *KVHandler) forwardRead(ctx context.Context, fn func(kvpb.KVServiceClient) error) error {
+// forwardRead, okuma isteğini lider adresine en fazla bir kez forward eder.
+func (h *KVHandler) forwardRead(ctx context.Context, fn func(context.Context, kvpb.KVServiceClient) error) error {
+	if md, ok := metadata.FromIncomingContext(ctx); ok && len(md.Get(forwardedReadMetadataKey)) > 0 {
+		return status.Error(codes.Unavailable, "read forwarding limit reached")
+	}
 	leaderAddr := h.raft.LeaderAddr()
 	if leaderAddr == "" {
-		return status.Error(codes.FailedPrecondition, "no known leader")
+		return status.Error(codes.Unavailable, "no known leader")
 	}
 	client, err := h.getLeaderClient(leaderAddr)
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "leader unreachable: %v", err)
 	}
-	return fn(client)
+	forwardCtx := metadata.AppendToOutgoingContext(ctx, forwardedReadMetadataKey, "1")
+	return fn(forwardCtx, client)
 }
 
 // propose, komutu JSON'a serialize edip Raft'a gönderir.
@@ -189,9 +196,9 @@ func (h *KVHandler) Get(ctx context.Context, req *kvpb.GetRequest) (*kvpb.GetRes
 	if _, err := h.raft.ReadIndex(ctx); err != nil {
 		// Lider değiliz veya ReadIndex başarısız — lidere forward et
 		var resp *kvpb.GetResponse
-		ferr := h.forwardRead(ctx, func(c kvpb.KVServiceClient) error {
+		ferr := h.forwardRead(ctx, func(forwardCtx context.Context, c kvpb.KVServiceClient) error {
 			var e error
-			resp, e = c.Get(ctx, req)
+			resp, e = c.Get(forwardCtx, req)
 			return e
 		})
 		return resp, ferr
@@ -286,9 +293,9 @@ func (h *KVHandler) HSet(ctx context.Context, req *kvpb.HSetRequest) (*kvpb.HSet
 func (h *KVHandler) HGet(ctx context.Context, req *kvpb.HGetRequest) (*kvpb.HGetResponse, error) {
 	if _, err := h.raft.ReadIndex(ctx); err != nil {
 		var resp *kvpb.HGetResponse
-		ferr := h.forwardRead(ctx, func(c kvpb.KVServiceClient) error {
+		ferr := h.forwardRead(ctx, func(forwardCtx context.Context, c kvpb.KVServiceClient) error {
 			var e error
-			resp, e = c.HGet(ctx, req)
+			resp, e = c.HGet(forwardCtx, req)
 			return e
 		})
 		return resp, ferr
@@ -319,9 +326,9 @@ func (h *KVHandler) HDelete(ctx context.Context, req *kvpb.HDeleteRequest) (*kvp
 func (h *KVHandler) HGetAll(ctx context.Context, req *kvpb.HGetAllRequest) (*kvpb.HGetAllResponse, error) {
 	if _, err := h.raft.ReadIndex(ctx); err != nil {
 		var resp *kvpb.HGetAllResponse
-		ferr := h.forwardRead(ctx, func(c kvpb.KVServiceClient) error {
+		ferr := h.forwardRead(ctx, func(forwardCtx context.Context, c kvpb.KVServiceClient) error {
 			var e error
-			resp, e = c.HGetAll(ctx, req)
+			resp, e = c.HGetAll(forwardCtx, req)
 			return e
 		})
 		return resp, ferr
@@ -336,9 +343,9 @@ func (h *KVHandler) HGetAll(ctx context.Context, req *kvpb.HGetAllRequest) (*kvp
 func (h *KVHandler) HExists(ctx context.Context, req *kvpb.HExistsRequest) (*kvpb.HExistsResponse, error) {
 	if _, err := h.raft.ReadIndex(ctx); err != nil {
 		var resp *kvpb.HExistsResponse
-		ferr := h.forwardRead(ctx, func(c kvpb.KVServiceClient) error {
+		ferr := h.forwardRead(ctx, func(forwardCtx context.Context, c kvpb.KVServiceClient) error {
 			var e error
-			resp, e = c.HExists(ctx, req)
+			resp, e = c.HExists(forwardCtx, req)
 			return e
 		})
 		return resp, ferr
@@ -465,9 +472,9 @@ func (h *KVHandler) RPop(ctx context.Context, req *kvpb.RPopRequest) (*kvpb.RPop
 func (h *KVHandler) LRange(ctx context.Context, req *kvpb.LRangeRequest) (*kvpb.LRangeResponse, error) {
 	if _, err := h.raft.ReadIndex(ctx); err != nil {
 		var resp *kvpb.LRangeResponse
-		ferr := h.forwardRead(ctx, func(c kvpb.KVServiceClient) error {
+		ferr := h.forwardRead(ctx, func(forwardCtx context.Context, c kvpb.KVServiceClient) error {
 			var e error
-			resp, e = c.LRange(ctx, req)
+			resp, e = c.LRange(forwardCtx, req)
 			return e
 		})
 		return resp, ferr
@@ -482,9 +489,9 @@ func (h *KVHandler) LRange(ctx context.Context, req *kvpb.LRangeRequest) (*kvpb.
 func (h *KVHandler) LLen(ctx context.Context, req *kvpb.LLenRequest) (*kvpb.LLenResponse, error) {
 	if _, err := h.raft.ReadIndex(ctx); err != nil {
 		var resp *kvpb.LLenResponse
-		ferr := h.forwardRead(ctx, func(c kvpb.KVServiceClient) error {
+		ferr := h.forwardRead(ctx, func(forwardCtx context.Context, c kvpb.KVServiceClient) error {
 			var e error
-			resp, e = c.LLen(ctx, req)
+			resp, e = c.LLen(forwardCtx, req)
 			return e
 		})
 		return resp, ferr
@@ -522,9 +529,9 @@ func (h *KVHandler) ZAdd(ctx context.Context, req *kvpb.ZAddRequest) (*kvpb.ZAdd
 func (h *KVHandler) ZScore(ctx context.Context, req *kvpb.ZScoreRequest) (*kvpb.ZScoreResponse, error) {
 	if _, err := h.raft.ReadIndex(ctx); err != nil {
 		var resp *kvpb.ZScoreResponse
-		ferr := h.forwardRead(ctx, func(c kvpb.KVServiceClient) error {
+		ferr := h.forwardRead(ctx, func(forwardCtx context.Context, c kvpb.KVServiceClient) error {
 			var e error
-			resp, e = c.ZScore(ctx, req)
+			resp, e = c.ZScore(forwardCtx, req)
 			return e
 		})
 		return resp, ferr
@@ -539,9 +546,9 @@ func (h *KVHandler) ZScore(ctx context.Context, req *kvpb.ZScoreRequest) (*kvpb.
 func (h *KVHandler) ZRank(ctx context.Context, req *kvpb.ZRankRequest) (*kvpb.ZRankResponse, error) {
 	if _, err := h.raft.ReadIndex(ctx); err != nil {
 		var resp *kvpb.ZRankResponse
-		ferr := h.forwardRead(ctx, func(c kvpb.KVServiceClient) error {
+		ferr := h.forwardRead(ctx, func(forwardCtx context.Context, c kvpb.KVServiceClient) error {
 			var e error
-			resp, e = c.ZRank(ctx, req)
+			resp, e = c.ZRank(forwardCtx, req)
 			return e
 		})
 		return resp, ferr
@@ -556,9 +563,9 @@ func (h *KVHandler) ZRank(ctx context.Context, req *kvpb.ZRankRequest) (*kvpb.ZR
 func (h *KVHandler) ZRange(ctx context.Context, req *kvpb.ZRangeRequest) (*kvpb.ZRangeResponse, error) {
 	if _, err := h.raft.ReadIndex(ctx); err != nil {
 		var resp *kvpb.ZRangeResponse
-		ferr := h.forwardRead(ctx, func(c kvpb.KVServiceClient) error {
+		ferr := h.forwardRead(ctx, func(forwardCtx context.Context, c kvpb.KVServiceClient) error {
 			var e error
-			resp, e = c.ZRange(ctx, req)
+			resp, e = c.ZRange(forwardCtx, req)
 			return e
 		})
 		return resp, ferr
@@ -573,9 +580,9 @@ func (h *KVHandler) ZRange(ctx context.Context, req *kvpb.ZRangeRequest) (*kvpb.
 func (h *KVHandler) ZRevRange(ctx context.Context, req *kvpb.ZRevRangeRequest) (*kvpb.ZRevRangeResponse, error) {
 	if _, err := h.raft.ReadIndex(ctx); err != nil {
 		var resp *kvpb.ZRevRangeResponse
-		ferr := h.forwardRead(ctx, func(c kvpb.KVServiceClient) error {
+		ferr := h.forwardRead(ctx, func(forwardCtx context.Context, c kvpb.KVServiceClient) error {
 			var e error
-			resp, e = c.ZRevRange(ctx, req)
+			resp, e = c.ZRevRange(forwardCtx, req)
 			return e
 		})
 		return resp, ferr

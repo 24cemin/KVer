@@ -128,13 +128,35 @@ func TestListStore(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrorPath_LLenNonExistent", func(t *testing.T) {
+	t.Run("Contract_LLenNonExistent", func(t *testing.T) {
 		t.Parallel()
 		_, ls, _ := setup()
-		_, err := ls.LLen("missing_key3")
-		// Our implementation returns ErrKeyNotFound for non-existent list keys
-		if err != ErrKeyNotFound {
-			t.Errorf("expected ErrKeyNotFound, got %v", err)
+		length, err := ls.LLen("missing_key3")
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if length != 0 {
+			t.Errorf("expected length 0, got %d", length)
+		}
+	})
+
+	t.Run("Contract_LLenEmptyList", func(t *testing.T) {
+		t.Parallel()
+		_, ls, _ := setup()
+		length, err := ls.LPush("empty_list", 0)
+		if err != nil {
+			t.Fatalf("failed to create empty list: %v", err)
+		}
+		if length != 0 {
+			t.Fatalf("expected empty list length 0, got %d", length)
+		}
+
+		length, err = ls.LLen("empty_list")
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if length != 0 {
+			t.Errorf("expected length 0, got %d", length)
 		}
 	})
 
@@ -160,12 +182,16 @@ func TestListStore(t *testing.T) {
 
 	t.Run("TTLPath_ExpiredLLen", func(t *testing.T) {
 		t.Parallel()
-		_, ls, _ := setup()
-		requireLPush(t, ls, "ttl_list1", 100*time.Millisecond, "a")
-		time.Sleep(150 * time.Millisecond)
-		_, err := ls.LLen("ttl_list1")
-		if err != ErrKeyNotFound {
-			t.Errorf("expected ErrKeyNotFound for expired list, got %v", err)
+		_, ls, ttl := setup()
+		requireLPush(t, ls, "ttl_list1", 0, "a")
+		ttl.SetAbsolute("ttl_list1", time.Now().Add(-time.Second).UnixMilli())
+
+		length, err := ls.LLen("ttl_list1")
+		if err != nil {
+			t.Fatalf("expected nil error for expired list, got %v", err)
+		}
+		if length != 0 {
+			t.Errorf("expected length 0 for expired list, got %d", length)
 		}
 	})
 
@@ -310,9 +336,12 @@ func TestListStore(t *testing.T) {
 		_, ls, _ := setup()
 		requireLPush(t, ls, "ttl_lpush", 100*time.Millisecond, "a")
 		time.Sleep(150 * time.Millisecond)
-		_, err := ls.LLen("ttl_lpush")
-		if err != ErrKeyNotFound {
-			t.Errorf("expected ErrKeyNotFound, got %v", err)
+		length, err := ls.LLen("ttl_lpush")
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if length != 0 {
+			t.Errorf("expected length 0, got %d", length)
 		}
 	})
 
