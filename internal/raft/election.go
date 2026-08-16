@@ -18,7 +18,7 @@ import (
 // Term artırılmaz. Çoğunluk onay verirse startElection() çağrılır.
 func (r *RaftNode) startPreVote() {
 	r.mu.Lock()
-	if r.state == Leader {
+	if r.fatalErr != nil || r.state == Leader {
 		r.mu.Unlock()
 		return
 	}
@@ -70,13 +70,13 @@ func (r *RaftNode) startPreVote() {
 				PreVote:      true,
 			}
 			resp, err := r.transport.RequestVote(ctx, id, req)
-			
+
 			if err != nil {
 				log.Printf("[%s] PreVote to %s failed: %v", r.config.NodeID, id, err)
 				return
 			}
-			
-			if resp.Term > nextTerm - 1 {
+
+			if resp.Term > nextTerm-1 {
 				r.mu.Lock()
 				r.stepDown(resp.Term)
 				r.mu.Unlock()
@@ -111,7 +111,7 @@ func (r *RaftNode) startPreVote() {
 
 func (r *RaftNode) startElection() {
 	r.mu.Lock()
-	if r.state == Leader {
+	if r.fatalErr != nil || r.state == Leader {
 		r.mu.Unlock()
 		return
 	}
@@ -128,7 +128,7 @@ func (r *RaftNode) startElection() {
 		r.mu.Unlock()
 		_ = r.persistentState.SaveTermAndVote(termToSave, votedForToSave)
 		r.mu.Lock()
-		
+
 		// Kilit serbestken state veya term değişmiş olabilir, kontrol et
 		if r.state != Candidate || r.currentTerm != termToSave {
 			r.mu.Unlock()
@@ -159,9 +159,13 @@ func (r *RaftNode) startElection() {
 		if r.state == Candidate && r.currentTerm == term {
 			r.state = Leader
 			log.Printf("[%s] became leader, term=%d", r.config.NodeID, term)
-			r.initLeaderState()
-			r.wg.Add(1)
-			go r.sendHeartbeats(context.Background())
+			if err := r.initLeaderState(); err != nil {
+				r.markFatalLocked(err)
+				log.Printf("[%s] leader initialization failed: %v", r.config.NodeID, err)
+			} else {
+				r.wg.Add(1)
+				go r.sendHeartbeats(context.Background())
+			}
 		}
 		r.mu.Unlock()
 		return
@@ -202,9 +206,13 @@ func (r *RaftNode) startElection() {
 					if r.state == Candidate && r.currentTerm == term {
 						r.state = Leader
 						log.Printf("[%s] became leader, term=%d", r.config.NodeID, term)
-						r.initLeaderState()
-						r.wg.Add(1)
-						go r.sendHeartbeats(context.Background())
+						if err := r.initLeaderState(); err != nil {
+							r.markFatalLocked(err)
+							log.Printf("[%s] leader initialization failed: %v", r.config.NodeID, err)
+						} else {
+							r.wg.Add(1)
+							go r.sendHeartbeats(context.Background())
+						}
 					}
 					r.mu.Unlock()
 				})
@@ -253,6 +261,9 @@ func (r *RaftNode) sendRequestVote(ctx context.Context, peerID string, term, las
 func (r *RaftNode) handleRequestVote(req *RequestVoteRequest) *RequestVoteResponse {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.fatalErr != nil {
+		return &RequestVoteResponse{Term: r.currentTerm, VoteGranted: false}
+	}
 	if req == nil {
 		return &RequestVoteResponse{Term: r.currentTerm, VoteGranted: false}
 	}

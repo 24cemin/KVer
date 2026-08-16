@@ -436,3 +436,40 @@ func TestElection_LeaderState_InitializedOnElection(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestElection_LogFreshnessUsesSnapshotBoundary(t *testing.T) {
+	node := &RaftNode{
+		config: &Config{
+			NodeID:             "node1",
+			ElectionTimeoutMin: time.Second,
+		},
+		state:       Follower,
+		currentTerm: 3,
+		log:         newRaftLog(),
+	}
+	requireNoError(t, node.log.Append(
+		LogEntry{Index: 1, Term: 1},
+		LogEntry{Index: 2, Term: 3},
+	))
+	requireNoError(t, node.log.CompactUpTo(2))
+
+	stale := node.handleRequestVote(&RequestVoteRequest{
+		Term:         4,
+		CandidateID:  "stale",
+		LastLogIndex: 100,
+		LastLogTerm:  2,
+	})
+	if stale.VoteGranted {
+		t.Fatalf("candidate with older last term must be rejected")
+	}
+
+	current := node.handleRequestVote(&RequestVoteRequest{
+		Term:         4,
+		CandidateID:  "current",
+		LastLogIndex: 2,
+		LastLogTerm:  3,
+	})
+	if !current.VoteGranted {
+		t.Fatalf("candidate matching snapshot boundary should be current enough")
+	}
+}

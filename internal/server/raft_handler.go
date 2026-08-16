@@ -5,9 +5,12 @@ package server
 
 import (
 	"context"
+	"errors"
 
 	"github.com/24cemin/KVer/internal/raft"
 	raftpb "github.com/24cemin/KVer/proto/raft/gen"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // RaftHandler, Raft gRPC servisini implement eder.
@@ -41,7 +44,10 @@ func (h *RaftHandler) AppendEntries(_ context.Context, req *raftpb.AppendEntries
 		})
 	}
 
-	resp := h.node.HandleAppendEntries(internalReq)
+	resp, err := h.node.HandleAppendEntriesWithError(internalReq)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 
 	// internal → proto
 	return &raftpb.AppendEntriesResponse{
@@ -77,12 +83,36 @@ func (h *RaftHandler) InstallSnapshot(_ context.Context, req *raftpb.InstallSnap
 		LeaderID:          req.LeaderId,
 		LastIncludedIndex: req.LastIncludedIndex,
 		LastIncludedTerm:  req.LastIncludedTerm,
+		Offset:            req.Offset,
+		Done:              req.Done,
+		TotalSize:         req.TotalSize,
+		Checksum:          req.Checksum,
+		ClusterConfig:     req.ClusterConfig,
 		Data:              req.Data,
 	}
 
-	resp := h.node.HandleInstallSnapshot(internalReq)
+	resp, err := h.node.HandleInstallSnapshot(internalReq)
+	if err != nil {
+		return nil, installSnapshotStatusError(err)
+	}
 
 	return &raftpb.InstallSnapshotResponse{
 		Term: resp.Term,
 	}, nil
+}
+
+func installSnapshotStatusError(err error) error {
+	switch {
+	case errors.Is(err, raft.ErrInvalidSnapshot):
+		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, raft.ErrSnapshotOffset),
+		errors.Is(err, raft.ErrSnapshotBoundaryMismatch),
+		errors.Is(err, raft.ErrSnapshotChunkMismatch):
+		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.Is(err, raft.ErrSnapshotChecksum),
+		errors.Is(err, raft.ErrCorruptLog):
+		return status.Error(codes.DataLoss, err.Error())
+	default:
+		return status.Error(codes.Internal, err.Error())
+	}
 }

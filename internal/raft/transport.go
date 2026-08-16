@@ -47,6 +47,11 @@ type InstallSnapshotRequest struct {
 	LeaderID          string
 	LastIncludedIndex uint64
 	LastIncludedTerm  uint64
+	Offset            uint64
+	Done              bool
+	TotalSize         uint64
+	Checksum          []byte
+	ClusterConfig     map[string]string
 	Data              []byte
 }
 

@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 )
 
@@ -78,6 +79,9 @@ func (r *RaftNode) ProposeMembershipChange(change MembershipChange) error {
 	}
 
 	if err := r.log.Append(entry); err != nil {
+		if errors.Is(err, ErrStorageUnavailable) {
+			r.markFatalLocked(err)
+		}
 		r.mu.Unlock()
 		return err
 	}

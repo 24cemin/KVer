@@ -175,6 +175,11 @@ func (t *GRPCTransport) InstallSnapshot(ctx context.Context, peerID string, req 
 		LeaderId:          req.LeaderID,
 		LastIncludedIndex: req.LastIncludedIndex,
 		LastIncludedTerm:  req.LastIncludedTerm,
+		Offset:            req.Offset,
+		Done:              req.Done,
+		TotalSize:         req.TotalSize,
+		Checksum:          req.Checksum,
+		ClusterConfig:     req.ClusterConfig,
 		Data:              req.Data,
 	})
 	if err != nil {
