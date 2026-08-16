@@ -2,14 +2,15 @@ package raft
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
 
 // mockTransportFull, AppendEntries davranışını da özelleştirilebilir yapıda tutar.
 type mockTransportFull struct {
-	requestVoteFn    func(ctx context.Context, peerID string, req *RequestVoteRequest) (*RequestVoteResponse, error)
-	appendEntriesFn  func(ctx context.Context, peerID string, req *AppendEntriesRequest) (*AppendEntriesResponse, error)
+	requestVoteFn     func(ctx context.Context, peerID string, req *RequestVoteRequest) (*RequestVoteResponse, error)
+	appendEntriesFn   func(ctx context.Context, peerID string, req *AppendEntriesRequest) (*AppendEntriesResponse, error)
 	installSnapshotFn func(ctx context.Context, peerID string, req *InstallSnapshotRequest) (*InstallSnapshotResponse, error)
 }
 
@@ -46,9 +47,9 @@ func newLeaderNode(t *testing.T, peers map[string]string, transport Transport) *
 	cfg := &Config{
 		NodeID:              "node1",
 		Peers:               peers,
-		HeartbeatInterval: 50 * time.Millisecond,
-		ElectionTimeoutMin: 150 * time.Millisecond,
-		ElectionTimeoutMax: 300 * time.Millisecond,
+		HeartbeatInterval:   50 * time.Millisecond,
+		ElectionTimeoutMin:  150 * time.Millisecond,
+		ElectionTimeoutMax:  300 * time.Millisecond,
 		MaxLogEntriesPerRPC: 100,
 	}
 	clusterConfig := &ClusterConfig{Peers: make(map[string]string)}
@@ -372,9 +373,9 @@ func newTestRaftNode(t *testing.T, nodeID string, peers map[string]string) *Raft
 	cfg := &Config{
 		NodeID:              nodeID,
 		Peers:               peers,
-		HeartbeatInterval: 50 * time.Millisecond,
-		ElectionTimeoutMin: 150 * time.Millisecond,
-		ElectionTimeoutMax: 300 * time.Millisecond,
+		HeartbeatInterval:   50 * time.Millisecond,
+		ElectionTimeoutMin:  150 * time.Millisecond,
+		ElectionTimeoutMax:  300 * time.Millisecond,
 		MaxLogEntriesPerRPC: 100,
 	}
 	clusterConfig := &ClusterConfig{Peers: make(map[string]string)}
@@ -482,4 +483,206 @@ func TestLeaderAddr_ReturnsAddrAfterAppendEntries(t *testing.T) {
 			t.Errorf("expected leader addr 'localhost:7002', got %q", addr)
 		}
 	})
+}
+
+func TestReplication_AppendEntriesMatchesSnapshotBoundary(t *testing.T) {
+	node := &RaftNode{
+		currentTerm: 2,
+		state:       Follower,
+		log:         newRaftLog(),
+		commitCh:    make(chan struct{}, 1),
+	}
+	requireNoError(t, node.log.Append(
+		LogEntry{Index: 1, Term: 1},
+		LogEntry{Index: 2, Term: 2},
+		LogEntry{Index: 3, Term: 2},
+	))
+	requireNoError(t, node.log.CompactUpTo(3))
+
+	response, err := node.processAppendEntries(&AppendEntriesRequest{
+		Term:         2,
+		LeaderID:     "node2",
+		PrevLogIndex: 3,
+		PrevLogTerm:  2,
+		Entries:      []LogEntry{{Index: 4, Term: 2}},
+	})
+	requireNoError(t, err)
+	if !response.Success {
+		t.Fatalf("snapshot boundary should satisfy previous-log check")
+	}
+	if node.log.LastIndex() != 4 {
+		t.Fatalf("expected entry 4 after boundary, got %d", node.log.LastIndex())
+	}
+}
+
+func TestReplication_AppendEntriesRejectsBoundaryTermMismatch(t *testing.T) {
+	node := &RaftNode{
+		currentTerm: 2,
+		state:       Follower,
+		log:         newRaftLog(),
+	}
+	requireNoError(t, node.log.Append(
+		LogEntry{Index: 1, Term: 1},
+		LogEntry{Index: 2, Term: 2},
+	))
+	requireNoError(t, node.log.CompactUpTo(2))
+
+	response, err := node.processAppendEntries(&AppendEntriesRequest{
+		Term:         2,
+		LeaderID:     "node2",
+		PrevLogIndex: 2,
+		PrevLogTerm:  1,
+	})
+	requireNoError(t, err)
+	if response.Success || response.ConflictTerm != 2 {
+		t.Fatalf("expected boundary term conflict, got %+v", response)
+	}
+}
+
+func TestReplication_DuplicateAppendEntriesIsIdempotent(t *testing.T) {
+	node := &RaftNode{
+		currentTerm: 1,
+		state:       Follower,
+		log:         newRaftLog(),
+		commitCh:    make(chan struct{}, 1),
+	}
+	request := &AppendEntriesRequest{
+		Term:         1,
+		LeaderID:     "node2",
+		PrevLogIndex: 0,
+		PrevLogTerm:  0,
+		Entries: []LogEntry{
+			{Index: 1, Term: 1, Command: []byte("one")},
+			{Index: 2, Term: 1, Command: []byte("two")},
+		},
+	}
+	first, err := node.processAppendEntries(request)
+	requireNoError(t, err)
+	second, err := node.processAppendEntries(request)
+	requireNoError(t, err)
+	if !first.Success || !second.Success {
+		t.Fatalf("duplicate AppendEntries must be accepted")
+	}
+	if node.log.LastIndex() != 2 {
+		t.Fatalf("duplicate request appended entries twice")
+	}
+}
+
+func TestReplication_RejectsNonContiguousRequestWithoutMutation(t *testing.T) {
+	node := &RaftNode{
+		currentTerm: 1,
+		state:       Follower,
+		log:         newRaftLog(),
+	}
+	response, err := node.processAppendEntries(&AppendEntriesRequest{
+		Term:         1,
+		LeaderID:     "node2",
+		PrevLogIndex: 0,
+		Entries: []LogEntry{
+			{Index: 1, Term: 1},
+			{Index: 3, Term: 1},
+		},
+	})
+	if !errors.Is(err, ErrNonContiguousLog) {
+		t.Fatalf("expected continuity error, got %v", err)
+	}
+	if response.Success || node.log.LastIndex() != 0 {
+		t.Fatalf("invalid batch mutated follower log")
+	}
+}
+
+func TestReplication_UsesSnapshotBelowBoundary(t *testing.T) {
+	installCalls := 0
+	transport := &mockTransportFull{
+		appendEntriesFn: func(context.Context, string, *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+			t.Fatal("AppendEntries must not be used below snapshot boundary")
+			return nil, nil
+		},
+		installSnapshotFn: func(_ context.Context, _ string, request *InstallSnapshotRequest) (*InstallSnapshotResponse, error) {
+			installCalls++
+			return &InstallSnapshotResponse{Term: request.Term}, nil
+		},
+	}
+	node := newLeaderNode(t, map[string]string{"node2": "addr2"}, transport)
+	defer node.Stop()
+	node.config.SnapshotChunkSize = 2
+	requireNoError(t, node.log.Append(
+		LogEntry{Index: 1, Term: 1},
+		LogEntry{Index: 2, Term: 1},
+		LogEntry{Index: 3, Term: 1},
+	))
+	requireNoError(t, node.log.CompactUpTo(3))
+	node.mu.Lock()
+	node.snapshotMeta = SnapshotMeta{
+		LastIncludedIndex: 3,
+		LastIncludedTerm:  1,
+		ClusterConfig: map[string]string{
+			"node1": "",
+			"node2": "addr2",
+		},
+	}
+	node.snapshotData = []byte("snapshot")
+	node.mu.Unlock()
+
+	requireNoError(t, node.replicateTo(context.Background(), "node2", 1))
+	if installCalls == 0 {
+		t.Fatalf("expected InstallSnapshot below boundary")
+	}
+}
+
+func TestReplication_PersistenceFailureIsNotAcknowledged(t *testing.T) {
+	cfg := testConfig("node1", nil)
+	cfg.DataDir = t.TempDir()
+	cfg.SyncWrites = true
+	node, err := NewRaftNode(cfg, &snapshotMockStateMachine{}, &mockTransport{})
+	requireNoError(t, err)
+	defer node.Stop()
+
+	node.log.mu.Lock()
+	requireNoError(t, node.log.walFile.Close())
+	node.log.mu.Unlock()
+
+	response, err := node.processAppendEntries(&AppendEntriesRequest{
+		Term:         1,
+		LeaderID:     "node2",
+		PrevLogIndex: 0,
+		Entries:      []LogEntry{{Index: 1, Term: 1}},
+	})
+	if !errors.Is(err, ErrStorageUnavailable) {
+		t.Fatalf("expected storage error, got %v", err)
+	}
+	if response.Success || node.log.LastIndex() != 0 {
+		t.Fatalf("failed persistence was acknowledged or published")
+	}
+	node.mu.RLock()
+	fatalErr := node.fatalErr
+	node.mu.RUnlock()
+	if !errors.Is(fatalErr, ErrNodeUnhealthy) {
+		t.Fatalf("storage failure did not quarantine node: %v", fatalErr)
+	}
+}
+
+func TestLeader_NoOpContinuesAfterFullCompaction(t *testing.T) {
+	node := &RaftNode{
+		config:        &Config{NodeID: "node1"},
+		clusterConfig: &ClusterConfig{Peers: map[string]string{"node1": ""}},
+		state:         Leader,
+		currentTerm:   4,
+		log:           newRaftLog(),
+		nextIndex:     make(map[string]uint64),
+		matchIndex:    make(map[string]uint64),
+		commitCh:      make(chan struct{}, 1),
+	}
+	requireNoError(t, node.log.Append(
+		LogEntry{Index: 1, Term: 3},
+		LogEntry{Index: 2, Term: 3},
+	))
+	requireNoError(t, node.log.CompactUpTo(2))
+	requireNoError(t, node.initLeaderState())
+
+	entry, err := node.log.GetEntry(3)
+	requireNoError(t, err)
+	if entry.Type != EntryNoop || entry.Term != 4 {
+		t.Fatalf("expected term-4 no-op at index 3, got %+v", entry)
+	}
 }

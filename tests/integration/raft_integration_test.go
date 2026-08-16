@@ -65,7 +65,7 @@ func (t *localTransport) AppendEntries(_ context.Context, peerID string,
 	if !ok || isIsolated {
 		return nil, context.DeadlineExceeded
 	}
-	return node.HandleAppendEntries(req), nil
+	return node.HandleAppendEntriesWithError(req)
 }
 
 func (t *localTransport) InstallSnapshot(_ context.Context, peerID string,
@@ -77,7 +77,7 @@ func (t *localTransport) InstallSnapshot(_ context.Context, peerID string,
 	if !ok || isIsolated {
 		return nil, context.DeadlineExceeded
 	}
-	return node.HandleInstallSnapshot(req), nil
+	return node.HandleInstallSnapshot(req)
 }
 
 func (t *localTransport) AddPeer(nodeID, address string) {}

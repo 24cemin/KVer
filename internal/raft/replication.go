@@ -5,6 +5,7 @@ package raft
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -17,32 +18,55 @@ func (r *RaftNode) replicateTo(ctx context.Context, peerID string, nextIndex uin
 			return ctx.Err()
 		default:
 		}
+
 		r.mu.RLock()
+		if r.fatalErr != nil {
+			err := r.fatalErr
+			r.mu.RUnlock()
+			return err
+		}
 		if r.state != Leader {
 			r.mu.RUnlock()
-			return nil
+			return ErrNotLeader
 		}
 		term := r.currentTerm
+		lastIndex := r.log.LastIndex()
+		baseIndex, _, _ := r.log.Boundary()
+		if nextIndex == 0 {
+			nextIndex = 1
+		}
+		if nextIndex > lastIndex+1 {
+			nextIndex = lastIndex + 1
+		}
+		if nextIndex <= baseIndex {
+			r.mu.RUnlock()
+			return r.sendSnapshot(ctx, peerID)
+		}
+
 		prevLogIndex := nextIndex - 1
-		var prevLogTerm uint64
-		if prevLogIndex > 0 {
-			entry, err := r.log.GetEntry(prevLogIndex)
-			if err != nil {
-				r.mu.RUnlock()
-				return err
+		prevLogTerm, err := r.log.TermAt(prevLogIndex)
+		if err != nil {
+			r.mu.RUnlock()
+			if errors.Is(err, ErrLogCompacted) {
+				return r.sendSnapshot(ctx, peerID)
 			}
-			prevLogTerm = entry.Term
+			return err
 		}
 		entries, err := r.log.GetEntriesFrom(nextIndex)
 		if err != nil {
 			r.mu.RUnlock()
-			// Log compacted — snapshot gönder
-			return r.sendSnapshot(ctx, peerID)
+			if errors.Is(err, ErrLogCompacted) {
+				return r.sendSnapshot(ctx, peerID)
+			}
+			return err
+		}
+		if limit := r.config.MaxLogEntriesPerRPC; limit > 0 && len(entries) > limit {
+			entries = entries[:limit]
 		}
 		commitIndex := r.commitIndex
 		r.mu.RUnlock()
 
-		req := &AppendEntriesRequest{
+		request := &AppendEntriesRequest{
 			Term:         term,
 			LeaderID:     r.config.NodeID,
 			PrevLogIndex: prevLogIndex,
@@ -51,47 +75,56 @@ func (r *RaftNode) replicateTo(ctx context.Context, peerID string, nextIndex uin
 			LeaderCommit: commitIndex,
 		}
 
-		rpcCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		resp, err := r.transport.AppendEntries(rpcCtx, peerID, req)
+		rpcContext, cancel := context.WithTimeout(ctx, 2*time.Second)
+		response, err := r.transport.AppendEntries(rpcContext, peerID, request)
 		cancel()
 		if err != nil {
 			return err
 		}
+		if response == nil {
+			return errors.New("AppendEntries returned a nil response")
+		}
 
 		r.mu.Lock()
-		if resp.Term > r.currentTerm {
-			r.stepDown(resp.Term)
+		if response.Term > r.currentTerm {
+			r.stepDown(response.Term)
 			r.mu.Unlock()
-			return nil
+			return ErrNotLeader
 		}
-
 		if r.state != Leader || r.currentTerm != term {
 			r.mu.Unlock()
-			return nil
+			return ErrNotLeader
 		}
 
-		if resp.Success {
-			newNextIndex := nextIndex + uint64(len(entries))
+		if response.Success {
+			newMatchIndex := prevLogIndex + uint64(len(entries))
+			newNextIndex := newMatchIndex + 1
 			if newNextIndex > r.nextIndex[peerID] {
 				r.nextIndex[peerID] = newNextIndex
 			}
-			newMatchIndex := newNextIndex - 1
 			if newMatchIndex > r.matchIndex[peerID] {
 				r.matchIndex[peerID] = newMatchIndex
 			}
 			r.advanceCommitIndex()
+			hasMore := newNextIndex <= r.log.LastIndex()
 			r.mu.Unlock()
-			return nil
-		} else {
-			if resp.ConflictIndex > 0 {
-				nextIndex = resp.ConflictIndex
-			} else if nextIndex > 1 {
-				nextIndex--
+			if hasMore {
+				nextIndex = newNextIndex
+				continue
 			}
-			r.nextIndex[peerID] = nextIndex
-			r.mu.Unlock()
-			// Loop to retry with updated nextIndex
+			return nil
 		}
+
+		if response.ConflictIndex > 0 {
+			nextIndex = response.ConflictIndex
+		} else if nextIndex > 1 {
+			nextIndex--
+		}
+		if nextIndex == 0 {
+			nextIndex = 1
+		}
+		r.nextIndex[peerID] = nextIndex
+		r.mu.Unlock()
 	}
 }
 
@@ -160,44 +193,73 @@ func (r *RaftNode) sendHeartbeatOnce(ctx context.Context) {
 
 // handleAppendEntries, gelen AppendEntries RPC'yi işler (follower tarafı).
 func (r *RaftNode) handleAppendEntries(req *AppendEntriesRequest) *AppendEntriesResponse {
+	response, _ := r.processAppendEntries(req)
+	return response
+}
+
+func (r *RaftNode) processAppendEntries(req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.fatalErr != nil {
+		return &AppendEntriesResponse{Term: r.currentTerm, Success: false}, r.fatalErr
+	}
 	if req == nil {
-		return &AppendEntriesResponse{Term: r.currentTerm, Success: false}
+		return &AppendEntriesResponse{Term: r.currentTerm, Success: false}, nil
 	}
-
-	// Eski term — reddet
 	if req.Term < r.currentTerm {
-		return &AppendEntriesResponse{Term: r.currentTerm, Success: false}
+		return &AppendEntriesResponse{Term: r.currentTerm, Success: false}, nil
 	}
-
-	// Geçerli liderden mesaj — stepDown ve heartbeat sıfırla
 	if req.Term > r.currentTerm || r.state != Follower {
 		r.stepDown(req.Term)
 	}
-	r.leaderID = req.LeaderID // geçerli lideri güncelle
+	r.leaderID = req.LeaderID
 	r.lastHeartbeat = time.Now()
 
-	// PrevLogIndex/PrevLogTerm kontrolü (Log Matching Property)
-	if req.PrevLogIndex > 0 {
-		entry, err := r.log.GetEntry(req.PrevLogIndex)
-		if err != nil {
-			// Log'da bu index yok — conflict
+	if len(req.Entries) > 0 {
+		if req.PrevLogIndex == ^uint64(0) {
+			return &AppendEntriesResponse{Term: r.currentTerm, Success: false}, ErrNonContiguousLog
+		}
+		if err := validateEntrySequence(req.Entries, req.PrevLogIndex+1); err != nil {
+			return &AppendEntriesResponse{Term: r.currentTerm, Success: false}, err
+		}
+	}
+
+	if r.log == nil {
+		if req.PrevLogIndex > 0 || len(req.Entries) > 0 {
+			return &AppendEntriesResponse{Term: r.currentTerm, Success: false}, ErrOutOfRange
+		}
+		return &AppendEntriesResponse{Term: r.currentTerm, Success: true}, nil
+	}
+
+	if req.PrevLogIndex == 0 {
+		baseIndex, _, _ := r.log.Boundary()
+		if baseIndex > 0 {
 			return &AppendEntriesResponse{
 				Term:          r.currentTerm,
 				Success:       false,
-				ConflictIndex: r.log.LastIndex() + 1,
-				ConflictTerm:  0,
-			}
+				ConflictIndex: r.log.FirstIndex(),
+			}, nil
 		}
-		if entry.Term != req.PrevLogTerm {
-			// Term uyuşmazlığı — conflicting term'in başlangıcını bul
-			conflictTerm := entry.Term
+	} else {
+		previousTerm, err := r.log.TermAt(req.PrevLogIndex)
+		if err != nil {
+			conflictIndex := r.log.LastIndex() + 1
+			if errors.Is(err, ErrLogCompacted) {
+				conflictIndex = r.log.FirstIndex()
+			}
+			return &AppendEntriesResponse{
+				Term:          r.currentTerm,
+				Success:       false,
+				ConflictIndex: conflictIndex,
+			}, nil
+		}
+		if previousTerm != req.PrevLogTerm {
+			baseIndex, _, _ := r.log.Boundary()
 			conflictIndex := req.PrevLogIndex
-			for conflictIndex > 1 {
-				e, err := r.log.GetEntry(conflictIndex - 1)
-				if err != nil || e.Term != conflictTerm {
+			for conflictIndex > baseIndex+1 {
+				term, err := r.log.TermAt(conflictIndex - 1)
+				if err != nil || term != previousTerm {
 					break
 				}
 				conflictIndex--
@@ -206,43 +268,51 @@ func (r *RaftNode) handleAppendEntries(req *AppendEntriesRequest) *AppendEntries
 				Term:          r.currentTerm,
 				Success:       false,
 				ConflictIndex: conflictIndex,
-				ConflictTerm:  conflictTerm,
-			}
+				ConflictTerm:  previousTerm,
+			}, nil
 		}
 	}
 
-	// Entries ekle — Log Matching: çakışan entry'leri kes, yenilerini ekle
-	if len(req.Entries) > 0 {
-		for i, entry := range req.Entries {
-			existing, err := r.log.GetEntry(entry.Index)
-			if err == nil && existing.Term != entry.Term {
-				// Çakışma: bu index'ten sonrasını sil ve yenilerini ekle
-				_ = r.log.TruncateAfter(entry.Index - 1)
-				_ = r.log.Append(req.Entries[i:]...)
-				break
-			} else if err != nil {
-				// Log'da yoksa ekle
-				_ = r.log.Append(req.Entries[i:]...)
-				break
+	for position, entry := range req.Entries {
+		existingTerm, err := r.log.TermAt(entry.Index)
+		switch {
+		case err == nil && existingTerm == entry.Term:
+			continue
+		case err == nil:
+			if err := r.log.TruncateAfter(entry.Index - 1); err != nil {
+				r.markStorageFailureLocked(err)
+				return &AppendEntriesResponse{Term: r.currentTerm, Success: false}, err
 			}
+			if err := r.log.Append(req.Entries[position:]...); err != nil {
+				r.markStorageFailureLocked(err)
+				return &AppendEntriesResponse{Term: r.currentTerm, Success: false}, err
+			}
+			goto entriesApplied
+		case errors.Is(err, ErrOutOfRange):
+			if err := r.log.Append(req.Entries[position:]...); err != nil {
+				r.markStorageFailureLocked(err)
+				return &AppendEntriesResponse{Term: r.currentTerm, Success: false}, err
+			}
+			goto entriesApplied
+		default:
+			return &AppendEntriesResponse{
+				Term:          r.currentTerm,
+				Success:       false,
+				ConflictIndex: r.log.FirstIndex(),
+			}, nil
 		}
 	}
 
-	// commitIndex güncelle
+entriesApplied:
 	if req.LeaderCommit > r.commitIndex {
 		lastIndex := r.log.LastIndex()
-		if req.LeaderCommit < lastIndex {
-			r.commitIndex = req.LeaderCommit
-		} else {
-			r.commitIndex = lastIndex
-		}
+		r.commitIndex = min(req.LeaderCommit, lastIndex)
 		select {
 		case r.commitCh <- struct{}{}:
 		default:
 		}
 	}
-
-	return &AppendEntriesResponse{Term: r.currentTerm, Success: true}
+	return &AppendEntriesResponse{Term: r.currentTerm, Success: true}, nil
 }
 
 // advanceCommitIndex, çoğunluk tarafından kopyalanmış en yüksek index'i commit eder.
@@ -295,6 +365,11 @@ func (r *RaftNode) advanceCommitIndex() {
 // beklenir.
 func (r *RaftNode) ReadIndex(ctx context.Context) (uint64, error) {
 	r.mu.RLock()
+	if r.fatalErr != nil {
+		err := r.fatalErr
+		r.mu.RUnlock()
+		return 0, err
+	}
 	if r.state != Leader {
 		r.mu.RUnlock()
 		return 0, ErrNotLeader
@@ -404,4 +479,10 @@ func (r *RaftNode) LeaderAddr() string {
 		return ""
 	}
 	return addr
+}
+
+func (r *RaftNode) markStorageFailureLocked(err error) {
+	if errors.Is(err, ErrStorageUnavailable) {
+		r.markFatalLocked(err)
+	}
 }

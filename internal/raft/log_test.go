@@ -1,6 +1,11 @@
 package raft
 
-import "testing"
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestRaftLog_AppendAndGet(t *testing.T) {
 	t.Run("AppendAndGetSuccess", func(t *testing.T) {
@@ -116,4 +121,156 @@ func TestRaftLog_GetEntriesFrom(t *testing.T) {
 			t.Error("expected ErrOutOfRange for index 0")
 		}
 	})
+}
+
+func TestRaftLog_RejectsNonContiguousAppendWithoutMutation(t *testing.T) {
+	log := newRaftLog()
+	requireNoError(t, log.Append(LogEntry{Index: 1, Term: 1}))
+
+	if err := log.Append(LogEntry{Index: 1, Term: 1}); !errors.Is(err, ErrNonContiguousLog) {
+		t.Fatalf("expected duplicate append rejection, got %v", err)
+	}
+	if err := log.Append(LogEntry{Index: 3, Term: 1}); !errors.Is(err, ErrNonContiguousLog) {
+		t.Fatalf("expected gap append rejection, got %v", err)
+	}
+	if err := log.Append(
+		LogEntry{Index: 2, Term: 1},
+		LogEntry{Index: 4, Term: 1},
+	); !errors.Is(err, ErrNonContiguousLog) {
+		t.Fatalf("expected discontinuous batch rejection, got %v", err)
+	}
+	if log.LastIndex() != 1 {
+		t.Fatalf("failed append mutated log: last index %d", log.LastIndex())
+	}
+	if _, err := log.GetEntry(2); !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("failed batch partially mutated log: %v", err)
+	}
+}
+
+func TestRaftLog_FullCompactionPreservesBoundary(t *testing.T) {
+	log := newRaftLog()
+	requireNoError(t, log.Append(
+		LogEntry{Index: 1, Term: 1},
+		LogEntry{Index: 2, Term: 2},
+		LogEntry{Index: 3, Term: 2},
+	))
+	requireNoError(t, log.CompactUpTo(3))
+
+	if log.FirstIndex() != 4 || log.LastIndex() != 3 || log.LastTerm() != 2 {
+		t.Fatalf("unexpected compacted boundary: first=%d last=%d term=%d", log.FirstIndex(), log.LastIndex(), log.LastTerm())
+	}
+	term, err := log.TermAt(3)
+	requireNoError(t, err)
+	if term != 2 {
+		t.Fatalf("expected boundary term 2, got %d", term)
+	}
+	if _, err := log.GetEntry(3); !errors.Is(err, ErrLogCompacted) {
+		t.Fatalf("expected compacted entry error, got %v", err)
+	}
+	requireNoError(t, log.Append(LogEntry{Index: 4, Term: 3}))
+}
+
+func TestRaftLog_RestoreSnapshotBoundaryRetainsOnlyMatchingSuffix(t *testing.T) {
+	t.Run("matching term", func(t *testing.T) {
+		log := newRaftLog()
+		requireNoError(t, log.Append(
+			LogEntry{Index: 1, Term: 1},
+			LogEntry{Index: 2, Term: 2},
+			LogEntry{Index: 3, Term: 3},
+		))
+		requireNoError(t, log.RestoreSnapshotBoundary(2, 2))
+		if log.FirstIndex() != 3 || log.LastIndex() != 3 {
+			t.Fatalf("matching suffix was not retained")
+		}
+	})
+
+	t.Run("mismatched term", func(t *testing.T) {
+		log := newRaftLog()
+		requireNoError(t, log.Append(
+			LogEntry{Index: 1, Term: 1},
+			LogEntry{Index: 2, Term: 1},
+			LogEntry{Index: 3, Term: 3},
+		))
+		requireNoError(t, log.RestoreSnapshotBoundary(2, 2))
+		if log.FirstIndex() != 3 || log.LastIndex() != 2 || log.LastTerm() != 2 {
+			t.Fatalf("mismatched suffix was not discarded")
+		}
+	})
+}
+
+func TestRaftLog_WALReloadPreservesBoundary(t *testing.T) {
+	directory := t.TempDir()
+	log, err := newRaftLogWithWAL(directory, "node1", true)
+	requireNoError(t, err)
+	requireNoError(t, log.Append(
+		LogEntry{Index: 1, Term: 1},
+		LogEntry{Index: 2, Term: 2},
+		LogEntry{Index: 3, Term: 2},
+	))
+	requireNoError(t, log.CompactUpTo(3))
+	requireNoError(t, log.Close())
+
+	reloaded, err := newRaftLogWithWAL(directory, "node1", true)
+	requireNoError(t, err)
+	t.Cleanup(func() {
+		if err := reloaded.Close(); err != nil {
+			t.Errorf("close reloaded WAL: %v", err)
+		}
+	})
+	if reloaded.LastIndex() != 3 || reloaded.LastTerm() != 2 || reloaded.FirstIndex() != 4 {
+		t.Fatalf("reloaded boundary mismatch: first=%d last=%d term=%d", reloaded.FirstIndex(), reloaded.LastIndex(), reloaded.LastTerm())
+	}
+	requireNoError(t, reloaded.Append(LogEntry{Index: 4, Term: 3}))
+}
+
+func TestRaftLog_WALRejectsIndexCorruption(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "node1_wal.bin")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+	requireNoError(t, err)
+	requireNoError(t, writeWALHeader(file, 0, 0))
+	requireNoError(t, writeWALRecord(file, LogEntry{Index: 1, Term: 1}))
+	requireNoError(t, writeWALRecord(file, LogEntry{Index: 3, Term: 1}))
+	requireNoError(t, file.Close())
+
+	if _, err := newRaftLogWithWAL(directory, "node1", true); !errors.Is(err, ErrNonContiguousLog) {
+		t.Fatalf("expected WAL continuity error, got %v", err)
+	}
+}
+
+func TestRaftLog_WALRecoversPartialTail(t *testing.T) {
+	directory := t.TempDir()
+	log, err := newRaftLogWithWAL(directory, "node1", true)
+	requireNoError(t, err)
+	requireNoError(t, log.Append(LogEntry{Index: 1, Term: 1}))
+	requireNoError(t, log.Close())
+
+	file, err := os.OpenFile(filepath.Join(directory, "node1_wal.bin"), os.O_WRONLY|os.O_APPEND, 0o644)
+	requireNoError(t, err)
+	_, err = file.Write([]byte{1, 2, 3})
+	requireNoError(t, err)
+	requireNoError(t, file.Close())
+
+	reloaded, err := newRaftLogWithWAL(directory, "node1", true)
+	requireNoError(t, err)
+	t.Cleanup(func() {
+		if err := reloaded.Close(); err != nil {
+			t.Errorf("close reloaded WAL: %v", err)
+		}
+	})
+	if reloaded.LastIndex() != 1 {
+		t.Fatalf("partial uncommitted tail changed recovered log")
+	}
+}
+
+func TestRaftLog_SnapshotIndex1000AppendsAt1001(t *testing.T) {
+	log := newRaftLog()
+	requireNoError(t, log.RestoreSnapshotBoundary(1000, 7))
+	if log.LastIndex() != 1000 || log.LastTerm() != 7 {
+		t.Fatalf("expected snapshot boundary 1000/7, got %d/%d", log.LastIndex(), log.LastTerm())
+	}
+	requireNoError(t, log.Append(LogEntry{Index: 1001, Term: 8}))
+	if log.LastIndex() != 1001 {
+		t.Fatalf("expected new entry at 1001, got %d", log.LastIndex())
+	}
 }

@@ -32,6 +32,12 @@ type Config struct {
 	// SnapshotThreshold, snapshot tetiklemek için gereken minimum log entry sayısı.
 	SnapshotThreshold uint64
 
+	// SnapshotChunkSize, InstallSnapshot aktarımındaki maksimum chunk boyutudur.
+	SnapshotChunkSize int
+
+	// MaxSnapshotSize, follower'ın kabul edeceği toplam snapshot boyutu sınırıdır.
+	MaxSnapshotSize uint64
+
 	// DataDir, WAL ve snapshot dosyalarının saklanacağı dizin.
 	DataDir string
 
@@ -55,6 +61,8 @@ func DefaultConfig(nodeID string) *Config {
 		HeartbeatInterval:   50 * time.Millisecond,
 		MaxLogEntriesPerRPC: 100,
 		SnapshotThreshold:   10000,
+		SnapshotChunkSize:   defaultSnapshotChunkSize,
+		MaxSnapshotSize:     defaultMaxSnapshotSize,
 		DataDir:             "./data",
 	}
 }

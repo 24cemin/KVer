@@ -60,7 +60,8 @@ type RaftNode struct {
 	persistentState *PersistentState
 
 	// stateMachine, commit edilen entry'leri uygular (StateMachine).
-	stateMachine StateMachine
+	stateMachine   StateMachine
+	stateMachineMu sync.Mutex
 
 	// transport, peer iletişimi için kullanılır (transport.go).
 	transport Transport
@@ -80,8 +81,11 @@ type RaftNode struct {
 	pendingMembership bool           // bekleyen membership var mı
 
 	// Snapshot state
-	snapshotMeta SnapshotMeta
-	snapshotData []byte
+	snapshotMu      sync.Mutex
+	snapshotMeta    SnapshotMeta
+	snapshotData    []byte
+	installSnapshot *installSnapshotState
+	fatalErr        error
 
 	// stopCh, node'u durdurmak için kapatılan kanal.
 	stopCh chan struct{}
@@ -162,6 +166,7 @@ func NewRaftNode(cfg *Config, sm StateMachine, transport Transport) (*RaftNode, 
 	}
 	// Disk'ten snapshot yükle (varsa)
 	if err := r.loadSnapshotFromDisk(); err != nil {
+		_ = raftLog.Close()
 		return nil, err
 	}
 
@@ -183,6 +188,7 @@ func (r *RaftNode) Stop() {
 		close(r.stopCh)
 	}
 	r.wg.Wait()
+	r.closeInstallSnapshot()
 
 	if r.log != nil {
 		if err := r.log.Close(); err != nil {
@@ -206,7 +212,10 @@ func (r *RaftNode) resetHeartbeat() {
 // initLeaderState, Raft §5.3 gereği node leader olduğunda çağrılır.
 // nextIndex ve matchIndex'i sıfırlar.
 // ÇAĞIRAN r.mu.Lock() tutmalıdır.
-func (r *RaftNode) initLeaderState() {
+func (r *RaftNode) initLeaderState() error {
+	if r.fatalErr != nil {
+		return r.fatalErr
+	}
 	lastIndex := r.log.LastIndex()
 	for peerID := range r.clusterConfig.Peers {
 		if peerID == r.config.NodeID {
@@ -221,9 +230,10 @@ func (r *RaftNode) initLeaderState() {
 		Term:  r.currentTerm,
 		Type:  EntryNoop,
 	}
-	_ = r.log.Append(entry)
+	if err := r.log.Append(entry); err != nil {
+		return err
+	}
 
-	// Replikasyonu tetikle (Raft §5.4.2)
 	ctx := context.Background()
 	for peerID := range r.clusterConfig.Peers {
 		if peerID == r.config.NodeID {
@@ -234,6 +244,7 @@ func (r *RaftNode) initLeaderState() {
 	}
 
 	r.advanceCommitIndex()
+	return nil
 }
 
 // stepDown, node'u follower'a düşürür ve term günceller.
@@ -310,6 +321,9 @@ func (r *RaftNode) batchLoop() {
 		}
 
 		if err != nil {
+			if errors.Is(err, ErrStorageUnavailable) {
+				r.markFatalLocked(err)
+			}
 			// Hata durumunda log'a yazılamadı, batch'i temizle
 			for _, req := range batch {
 				req.waitCh <- err
@@ -380,6 +394,10 @@ func (r *RaftNode) applyEntriesLoop() {
 			return
 		case <-r.commitCh:
 			r.mu.Lock()
+			if r.fatalErr != nil {
+				r.mu.Unlock()
+				continue
+			}
 			for r.commitIndex > r.lastApplied {
 				nextToApply := r.lastApplied + 1
 				entry, err := r.log.GetEntry(nextToApply)
@@ -388,35 +406,36 @@ func (r *RaftNode) applyEntriesLoop() {
 					break
 				}
 				r.mu.Unlock()
+
+				r.stateMachineMu.Lock()
+				var applyErr error
 				if entry.Type == EntryMembership {
-					if err := r.applyMembership(entry); err != nil {
-						_ = err
-					}
+					applyErr = r.applyMembership(entry)
 				} else {
-					_ = r.stateMachine.Apply(entry)
+					applyErr = r.stateMachine.Apply(entry)
 				}
+
 				r.mu.Lock()
 				r.lastApplied = nextToApply
-				// No-Op entry commit edildiğinde ReadIndex protokolünü kilitle aç
 				if entry.Type == EntryNoop && r.state == Leader && entry.Term == r.currentTerm {
 					r.noopCommitted = true
 				}
-				if ch, ok := r.waiters[entry.Index]; ok {
-					ch <- nil
+				if waiter, ok := r.waiters[entry.Index]; ok {
+					waiter <- applyErr
 					delete(r.waiters, entry.Index)
 				}
-
-				// Zaten uygulandı, uyandırmaya gerek yok
 				select {
 				case r.applyCh <- struct{}{}:
 				default:
 				}
-
 				if r.config.SnapshotThreshold > 0 && r.lastApplied%r.config.SnapshotThreshold == 0 {
 					go func() {
 						_ = r.takeSnapshot()
 					}()
 				}
+				r.mu.Unlock()
+				r.stateMachineMu.Unlock()
+				r.mu.Lock()
 			}
 			r.mu.Unlock()
 		}
@@ -475,13 +494,17 @@ func (r *RaftNode) HandleAppendEntries(req *AppendEntriesRequest) *AppendEntries
 	return r.handleAppendEntries(req)
 }
 
+func (r *RaftNode) HandleAppendEntriesWithError(req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+	return r.processAppendEntries(req)
+}
+
 // HandleRequestVote, gelen RequestVote RPC'yi işler (server katmanı için public wrapper).
 func (r *RaftNode) HandleRequestVote(req *RequestVoteRequest) *RequestVoteResponse {
 	return r.handleRequestVote(req)
 }
 
 // HandleInstallSnapshot, gelen InstallSnapshot RPC'yi işler (server katmanı için public wrapper).
-func (r *RaftNode) HandleInstallSnapshot(req *InstallSnapshotRequest) *InstallSnapshotResponse {
+func (r *RaftNode) HandleInstallSnapshot(req *InstallSnapshotRequest) (*InstallSnapshotResponse, error) {
 	return r.handleInstallSnapshot(req)
 }
 
@@ -489,8 +512,12 @@ func (r *RaftNode) HandleInstallSnapshot(req *InstallSnapshotRequest) *InstallSn
 func (r *RaftNode) Propose(cmd []byte) error {
 	r.mu.RLock()
 	isLeader := r.state == Leader
+	fatalErr := r.fatalErr
 	r.mu.RUnlock()
 
+	if fatalErr != nil {
+		return fatalErr
+	}
 	if !isLeader {
 		return ErrNotLeader
 	}
